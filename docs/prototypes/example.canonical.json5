@@ -1,0 +1,97 @@
+// ~/.config/zonas/zonas.json5
+//
+// Zonas reads this file and the visual editor writes it. Same file, same shape.
+// Edit it here, drag a zone in the editor, and what you wrote survives: these
+// comments, your ordering, your names.
+//
+// Zones are fractions of the screen's usable area — what is left after the menu
+// bar, the Dock and, on the machines that have one, the notch. Keeping them
+// relative is what makes a layout written on the laptop land correctly on the
+// 34" monitor without redrawing it.
+//
+//        x: 0                                   x: 1
+//   y: 0 ┌───────────┬───────────────────────────┐
+//        │           │                           │
+//        │           │   { x: 0.25, y: 0,        │
+//        │           │     width: 0.75,          │
+//        │           │     height: 1 }           │
+//   y: 1 └───────────┴───────────────────────────┘
+//
+// Save and Zonas reloads on its own. If the file does not parse it says so with
+// the line number, keeps the zones it already had, and does not touch a byte of
+// what you wrote.
+
+{
+  version: 1,
+
+  // Applies to every layout below. Any layout can override any of these.
+  defaults: {
+    modifier: "shift",  // shift | control | option | command
+    gap: 8,  // points of air between zones
+    margin: 0,  // points between the zones and the screen edge
+  },
+
+  layouts: [
+    // ── The everyday one ──────────────────────────────────────────────
+    // Editor in the middle, docs on the left, chat on the right.
+    {
+      name: "Three Columns",
+      zones: [
+        { name: "Left",   x: 0,    y: 0, width: 0.25, height: 1 },
+        { name: "Center", x: 0.25, y: 0, width: 0.5,  height: 1 },
+        { name: "Right",  x: 0.75, y: 0, width: 0.25, height: 1 },
+      ],
+    },
+
+    // ── The 34" ───────────────────────────────────────────────────────
+    // "1/3" is a ratio, not a string: exact thirds, and it reads like what you
+    // meant. Written as 0.3333 the three columns leave a sliver on the right
+    // edge that you will notice eventually and never find.
+    {
+      name: "Ultrawide",
+      gap: 12,  // more air, there is room for it
+      zones: [
+        { name: "Reference", x: 0,     y: 0,     width: "1/3", height: 1 },
+        { name: "Work",      x: "1/3", y: 0,     width: "1/3", height: 1 },
+        { name: "Terminal",  x: "2/3", y: 0,     width: "1/3", height: "2/3" },
+        { name: "Music",     x: "2/3", y: "2/3", width: "1/3", height: "1/3" },
+      ],
+    },
+
+    // ── The laptop ────────────────────────────────────────────────────
+    // Two halves, plus a smaller "Focus" zone floating on top of them. Overlap
+    // is deliberate and supported: when zones overlap the SMALLEST one under
+    // the cursor wins, so Focus is reachable without swallowing the halves.
+    {
+      name: "Laptop",
+      zones: [
+        { name: "Left",  x: 0,    y: 0,    width: 0.5, height: 1 },
+        { name: "Right", x: 0.5,  y: 0,    width: 0.5, height: 1 },
+        { name: "Focus", x: 0.15, y: 0.08, width: 0.7, height: 0.84 },
+      ],
+    },
+
+    // ── Four quadrants ────────────────────────────────────────────────
+    {
+      name: "Quarters",
+      zones: [
+        { name: "1", x: 0,   y: 0,   width: 0.5, height: 0.5 },
+        { name: "2", x: 0.5, y: 0,   width: 0.5, height: 0.5 },
+        { name: "3", x: 0,   y: 0.5, width: 0.5, height: 0.5 },
+        { name: "4", x: 0.5, y: 0.5, width: 0.5, height: 0.5 },
+      ],
+    },
+  ],
+
+  // Which layout each screen starts with. First match wins; a rule with no match
+  // keys catches everything, so keep that one last.
+  //
+  // The menu's "Copy Screen Info" puts the values for the monitors you have
+  // plugged in right now on the clipboard, so you can paste instead of guess.
+  screens: [
+    { name: "*Studio Display*", layout: "Ultrawide" },
+    { minWidth: 3000, layout: "Ultrawide" },
+    { builtin: true, layout: "Laptop" },
+    { layout: "Three Columns" },
+  ],
+}

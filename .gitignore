@@ -3,3 +3,9 @@
 *.xcodeproj
 DerivedData/
 .DS_Store
+
+# release.sh: its own SwiftPM scratch tree, so a cross-compiled x86_64 build
+# never shares an llbuild database with the one used for development, and the
+# signed artifacts it produces.
+.build-release/
+dist/

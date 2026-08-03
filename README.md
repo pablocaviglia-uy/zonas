@@ -20,13 +20,73 @@ previewing the zones, moving the window — but zones are still edited by hand i
 a JSON file. There is no visual editor yet, and that is the main thing standing
 between this and something you would recommend to someone else.
 
+## Install
+
+If you only want to use it, there is nothing to compile. Download
+**`Zonas-x.y.z.dmg`** from the
+[Releases page](https://github.com/pablocaviglia-uy/zonas/releases). It is
+signed with a Developer ID and notarized by Apple, and it runs on Apple Silicon
+and Intel Macs alike, on macOS 14 (Sonoma) or later.
+
+Open the disk image and **drag Zonas onto the Applications folder** next to it.
+
+That drag matters more than it looks. An app launched from where the browser
+left it — the disk image, or `~/Downloads` — runs under *App Translocation*:
+macOS executes it from a read-only copy in a temporary directory whose path
+changes on every single launch. For this app that is not cosmetic. "Launch at
+Login" would stay greyed out forever, and the Accessibility permission would
+have to be granted again and again, each time to a path that no longer exists.
+Dragging it in the Finder is what cancels translocation.
+
+### The first launch
+
+Open Zonas from Applications. macOS asks once whether you are sure, because it
+was downloaded from the internet, and tells you Apple checked it and found no
+malicious software. Click **Open**.
+
+**And then nothing happens.** That is the app working. It is also the most
+confusing minute of using it: Zonas has no window and no icon in the Dock, on
+purpose. The only trace of it is a new menu bar icon — a small rectangle split
+into three, dimmed — at the top right of the screen. On a MacBook with a notch
+and a busy menu bar it can end up *underneath* the notch, where it is simply
+invisible; if you cannot find it, quit something else that lives up there.
+
+The icon is dimmed because Zonas cannot do anything yet. Moving another
+application's window requires the **Accessibility** permission, and only you can
+grant it:
+
+1. Click the menu bar icon → **Accessibility Permissions…**
+2. Two things happen at once, which is deliberate: a system dialog asks whether
+   to let Zonas control your computer, and System Settings opens straight to
+   Privacy & Security → Accessibility.
+3. Find **Zonas** in that list and switch it on. Confirm with Touch ID or your
+   password.
+
+Within a second and a half the menu bar icon stops looking dimmed, on its own.
+That is the only confirmation there is, and it is the one to wait for.
+
+Now hold **⇧ Shift** and drag any window. Three zones light up — a quarter, a
+half, a quarter — and dropping the window fills whichever one is under the
+cursor. Those three are just the layout it starts with; they live in a JSON
+file you can edit, see [The zones](#the-zones).
+
+There is no automatic update yet. New versions are announced on the Releases
+page, and installing one is the same drag over the old copy — the Accessibility
+permission survives it, because it is tied to the signing certificate and not
+to the particular build.
+
 ## Requirements
 
-- macOS 14 (Sonoma) or later.
-- Xcode 16 or the matching Command Line Tools — the package declares
-  `swift-tools-version: 6.0` and builds in Swift 5 language mode.
+To run it:
+
+- macOS 14 (Sonoma) or later, Apple Silicon or Intel.
 - The **Accessibility** permission. It is not optional: without it the app
   cannot move other applications' windows and fails silently.
+
+To build it:
+
+- Xcode 16 or the matching Command Line Tools — the package declares
+  `swift-tools-version: 6.0` and builds in Swift 5 language mode.
 - Recommended before your first build: a self-signed code signing certificate.
   See [Development signing](#development-signing) — skipping it is the single
   most common way to lose an afternoon on this project.
@@ -49,6 +109,13 @@ it needs an `Info.plist` and a signature.
 | `./build.sh release` | Same, optimized |
 | `./build.sh -r` | Release build, installs into `/Applications` and opens it |
 | `./build.sh debug -r` | Forces a debug build and installs it anyway |
+| `./build.sh release -u` | Universal (arm64 + x86_64). What `release.sh` ships |
+
+`-u` is off by default because waiting on an x86_64 slice that this machine will
+never execute is time thrown away — it roughly doubles the build. It exists for
+[Releasing](#releasing), where leaving it out would publish a bundle that does
+not launch at all on an Intel Mac: Rosetta translates Intel→ARM and never the
+other way round.
 
 The split default is deliberate: what you build to look at can be debug, but
 what gets copied into `/Applications` and then hangs off your mouse all day
@@ -181,9 +248,12 @@ earlier build.
    ```
 4. Export a `.p12` backup **outside the repository**. Losing the certificate
    breaks the permission exactly the same way as never having had one.
-5. Build. `build.sh` finds the identity on its own — it looks for `Zonas Dev`,
-   `Apple Development` or `Developer ID Application`, in that order. To force a
-   specific one:
+5. Build. `build.sh` finds the identity on its own: it takes the first of
+   `Zonas Dev`, `Apple Development` or `Developer ID Application` that shows up
+   in the keychain listing — the keychain's order decides, not the order in that
+   list. Any of the three gives a stable requirement, so for development it does
+   not matter which; `release.sh` writes its identity out in full rather than
+   searching, because there it does. To force a specific one:
    ```bash
    ZONAS_SIGN_ID="My Certificate" ./build.sh
    ```
@@ -199,11 +269,30 @@ permission from breaking again later:
   keeps validating past expiry, because there is proof it was made while the
   certificate was still valid.
 - After every build it prints the resulting designated requirement, on a line
-  starting with `requisito:` — the same thing you would get from
+  starting with `requirement:` — the same thing you would get from
   `codesign -d -r- /Applications/Zonas.app`. That single line is the thing to
   watch. Signed with a certificate it names the certificate and stays identical
   build after build; if it ever changes, TCC will reject the app no matter what
   the switch says.
+- It signs with `--options runtime`, the hardened runtime, the same as a release
+  build. Notarization requires it, and building development and release copies
+  the same way is the point: whatever breaks under it should break here and not
+  two minutes into an upload. It needs no entitlements — the event tap and the
+  Accessibility API are governed by TCC at runtime, not by entitlements — and it
+  does not change the designated requirement, so turning it on does not cost
+  anyone a permission they had already granted.
+
+  The one thing it takes away is attaching a debugger. `lldb` cannot attach to a
+  hardened process without `com.apple.security.get-task-allow`, an entitlement
+  the notary rejects by name. So it lives in its own file, opt-in, one build at
+  a time:
+
+  ```bash
+  ZONAS_DEBUG_ENTITLEMENTS=1 ./build.sh -r
+  ```
+
+  `release.sh` refuses to publish anything whose signature carries entitlements,
+  so leaving that variable set fails locally instead of remotely.
 
 Zonas also writes its own signature fingerprint — the live process's cdhash and
 designated requirement — into the log at startup, which closes the diagnosis at
@@ -248,6 +337,59 @@ the absolute path is required):
   | grep -i zonas | grep -E "Failed to match|cdhash H|TCCDEvent"
 ```
 
+## Releasing
+
+`release.sh` builds the file that ends up on the Releases page: a single `.dmg`,
+universal, signed with a Developer ID, hardened, notarized by Apple and with the
+ticket stapled into it so that it opens on a Mac with no network.
+
+```bash
+./release.sh 0.1.0
+```
+
+Once per machine, and never in the repository, the notarization credentials have
+to go into the keychain:
+
+```bash
+xcrun notarytool store-credentials zonas --team-id YY7SF272MV
+```
+
+It asks for an Apple ID and an **app-specific password** — one generated at
+[appleid.apple.com](https://appleid.apple.com), not the Apple ID password
+itself. Every command in `release.sh` then goes through
+`--keychain-profile zonas`; no credential is ever written to a file.
+
+A few decisions worth knowing about:
+
+- **The version is read, not written.** It comes from
+  `Resources/Info.plist`, and the argument only has to agree with it. That way
+  the git tag, the plist and the file name cannot drift apart. Building from a
+  dirty working tree is refused, because a release nobody can rebuild from the
+  tag is not a release.
+- **Everything Apple would reject is checked locally first**, before uploading
+  anything: hardened runtime missing, no secure timestamp, entitlements present,
+  a binary that is not universal, a certificate that is not a Developer ID, an
+  rpath left pointing at the local Xcode toolchain.
+- **It prints the designated requirement and compares it with the copy already
+  installed in `/Applications`.** If those two ever differ, every person who
+  updates loses their Accessibility permission — see above for why. It is the
+  one line in the output worth reading every time.
+- **A `.dmg` and not a `.zip`**, which is what most similar projects publish,
+  for the App Translocation reason explained in [Install](#install): the `.zip`
+  invites the double click in `~/Downloads`, and the disk image with its
+  `/Applications` alias invites the drag.
+- **If Apple takes longer than the timeout, nothing is lost.** The submission
+  keeps processing on their side, and `./release.sh 0.1.0 --resume` collects the
+  answer without rebuilding or re-uploading. Re-uploading would be worse than
+  useless: every `codesign` produces a new cdhash, and tickets are issued per
+  cdhash, so a rebuilt artifact is a different artifact.
+- **It publishes nothing and never touches `/Applications`.** The last thing it
+  prints is the `git tag` and `gh release` commands to run by hand, plus the
+  path to a quarantined copy of the `.dmg` for rehearsing the download.
+
+Notarizing belongs to tags, not to commits: refusing to sign twice is not
+laziness, it is that every signature invalidates the previous ticket.
+
 ## How it is put together
 
 | File | What it solves |
@@ -260,6 +402,8 @@ the absolute path is required):
 | `AppDelegate.swift` | Menu bar, permission watchdog, wiring. |
 | `LaunchAtLogin.swift` | The login item, via `SMAppService`. |
 | `Log.swift` | Append-only file logging. |
+| `build.sh` | Wraps the executable in a real `.app` and signs it. |
+| `release.sh` | Universal, notarized, stapled `.dmg` for the Releases page. |
 
 ## Not there yet
 
@@ -268,7 +412,8 @@ the absolute path is required):
 - [ ] Respecting the minimum window size each app enforces
 - [ ] Testing against Electron, Java and other apps that do not cooperate with the Accessibility API
 - [ ] Preferences: choosing the modifier key, gaps between zones
-- [ ] Signing and notarization so it can actually be distributed
+- [ ] A Homebrew cask, so `brew install --cask zonas` works
+- [ ] Automatic updates. Today a new version means downloading the `.dmg` again
 
 ## License
 

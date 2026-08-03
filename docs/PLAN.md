@@ -1,0 +1,705 @@
+# Zonas — working plan
+
+Written 2026-08-03, at the end of the session that built the prototype. In
+English because the code, the comments and the README are, and because whoever
+picks this up next will be reading `file.swift:line` references against English
+source.
+
+This is a handoff document. It carries the decisions **and the reasons for
+them**, because most of the reasons cost hours to find and none of them are
+obvious from the code. Where a decision was made against the obvious
+alternative, the alternative and why it lost are written down too — that is the
+part that stops the next person from cheerfully undoing it.
+
+---
+
+## 1. Where things stand
+
+**Repository:** https://github.com/pablocaviglia-uy/zonas — public, MIT, one
+commit (`d5fa8e3`).
+
+**What works, end to end:** hold ⇧ while dragging a window, the zones light up,
+drop it and the window fills the one under the cursor. Zones are stored as
+fractions of the screen's usable area, so the same layout works on a 5120×1440
+ultrawide and on the laptop screen with no changes. Verified on both.
+
+**How it is built and signed:** `build.sh` compiles with SwiftPM, wraps the
+binary in a real `.app`, and signs it with a Developer ID certificate
+(`Developer ID Application: Pablo Caviglia (YY7SF272MV)`, expires
+**2027-02-01**) with hardened runtime and a secure timestamp. It can produce a
+universal binary with `-u`.
+
+**Source layout:**
+
+| File | What it owns |
+|---|---|
+| `DragMonitor.swift` | The `CGEventTap` that detects the drag. macOS has no API that says "a window is being moved", so this is the awkward part. |
+| `AXWindow.swift` | Reading and moving other apps' windows through the Accessibility API. |
+| `Coords.swift` | Converting between macOS's two screen coordinate systems. The number one source of bugs in this kind of app. |
+| `OverlayController.swift` | The translucent layer that draws the zones. |
+| `Zone.swift` | Model and JSON persistence. |
+| `LaunchAtLogin.swift` | `SMAppService` registration. |
+| `Signature.swift` | Logs the live process's cdhash and designated requirement. |
+| `Log.swift` | File log at `~/Library/Logs/Zonas.log`. |
+| `AppDelegate.swift` | Menu bar, permissions, wiring. |
+
+### Uncommitted work sitting in the tree
+
+Produced by the release-pipeline research and **not yet reviewed by a human**:
+
+- `release.sh` — new. Universal build, notarization, stapling, DMG. **Never run.**
+- `Resources/Zonas-debug.entitlements` — new.
+- `build.sh` — modified: universal support, hardened runtime, rpath stripping.
+- `README.md` — modified: install section, first-launch walkthrough.
+- `.gitignore` — modified: `.build-release/`, `dist/`.
+
+Read these before committing. They were written by agents against a verified
+machine, but nobody has run `release.sh` end to end.
+
+### The one blocking human step
+
+Notarization credentials are not stored yet:
+
+```bash
+xcrun notarytool store-credentials zonas --team-id YY7SF272MV
+```
+
+It needs an app-specific password generated at appleid.apple.com → Sign-In and
+Security → App-Specific Passwords. Apple shows it once. It goes into the
+keychain under the profile name `zonas`, and every script refers to it as
+`--keychain-profile zonas` — the password itself never appears in the repo, in a
+script, or in shell history.
+
+Verify with a command that does not touch the credential:
+
+```bash
+xcrun notarytool history --keychain-profile zonas
+```
+
+An empty list means success. An error means the profile is not there.
+
+### Two things a fresh session should know
+
+**A test copy may be running.** During the release research, agents launched
+copies of Zonas from `dist/` and from scratch directories. Check with
+`pgrep -x Zonas` and confirm the path — only the copy in `/Applications` should
+be running day to day, because `LaunchAtLogin` deliberately refuses to talk to
+Background Task Management from anywhere else.
+
+**Two user-facing warnings were seen during testing, and both are real.**
+macOS 26 showed *"Support Ending for Intel-based Apps"* while universal binaries
+were being launched, and the Gatekeeper *"Apple could not verify Zonas is free
+of malware"* dialog appeared for a quarantined unnotarized copy. The second is
+exactly what every downloader would see today; eliminating it is the whole point
+of the notarization work. The first is unresolved and is noted in §7.
+
+---
+
+## 2. The one thing that costs an afternoon if you do not know it
+
+Accessibility permission is not granted to "the app". It is granted to a
+**signature**.
+
+Next to the toggle in System Settings, TCC stores the *code requirement* the app
+satisfied when permission was granted, and re-checks it every time the app calls
+`AXIsProcessTrusted()`. With an ad-hoc signature that requirement is
+`cdhash H"..."` — the hash of the binary — and `swift build` produces a
+different binary on every run, even from identical sources at the same path.
+
+So the toggle stays on in Settings while `AXIsProcessTrusted()` returns `false`
+forever, because the code asking is no longer the code that was said yes to. In
+the system log:
+
+```
+tccd: Failed to match existing code requirement
+```
+
+Two consequences that are not guessable:
+
+**Turning the toggle off and on does not fix it.** That rewrites the boolean and
+keeps the old requirement. Measured against tccd's log during this session: two
+off/on cycles, both denied; then removing the entry with **−** and re-adding it
+with **+**, granted. Only a delete-and-re-add rewrites the requirement.
+
+**With a real certificate the problem disappears entirely.** The requirement
+becomes the certificate and the Team ID, neither of which changes between
+builds. Proven: two builds with different cdhashes, permission held across both
+with no user action.
+
+When permission "gets lost", this is the first and usually only thing to check:
+
+```bash
+codesign -d -r- /Applications/Zonas.app
+/usr/bin/log show --last 30m --predicate 'subsystem == "com.apple.TCC"' --info --debug \
+  | grep -i zonas | grep -E "Failed to match|authValue"
+```
+
+(`log` is a zsh builtin — the absolute path is required.)
+
+The app logs its own fingerprint at startup precisely so this is a one-line
+diagnosis rather than an investigation. If the cdhash changed since the previous
+run *and* the requirement still mentions `cdhash`, the permission is already
+broken and there is nothing to debug.
+
+---
+
+## 3. Fixes to land before building anything new
+
+Eight items, ordered by what they cost to fix later rather than by size. All
+verified against the current code and against the file the app actually wrote on
+this machine.
+
+### a) `Zone.id` is written to the file, contradicting the README
+
+`Zone.swift:11` (`var id: UUID = UUID()`) plus the `CodingKeys` in the extension
+at `Zone.swift:29-31` — Swift synthesizes `encode(to:)` over those same keys, so
+`save()` serializes it. Not theoretical: the layout file on this machine
+contains three UUIDs the user never typed. And because they are regenerated on
+every reload they are useless as identity for the editor anyway.
+
+**Remove `id` from the on-disk schema. This goes first**, because once the
+editor exists, changing the schema becomes a migration.
+
+The in-memory identity the editor needs is a separate thing — see §5.
+
+### b) `save()` is not atomic, and the obvious fix breaks dotfiles
+
+`Zone.swift:135` writes with `try? data.write(to: url)`, no `.atomic`. Once a
+file watcher exists, a half-written file is a parse error; a crash mid-write
+loses the layouts.
+
+But adding `.atomic` on its own introduces a worse bug, verified with all three
+variants:
+
+```
+[A plain ] still a symlink: true  | real file: PLAIN
+[B atomic] still a symlink: false | real file: ORIGINAL   <-- repo left stale
+[C resolv] still a symlink: true  | real file: ATOMIC-RESOLVED
+```
+
+`.atomic` writes to a temporary file and renames over the target, **replacing
+the symlink with a regular file**. Someone whose config is symlinked from a
+dotfiles repo silently ends up with a stale repo copy and a broken link, with no
+error anywhere. The fix is `resolvingSymlinksInPath()` before every write —
+case C.
+
+`URLResourceValues.canonicalPath` does **not** work: verified, it resolves
+`/var`→`/private/var` but returns the link's own path, not the target's.
+
+This needs a comment in the code and a test, because the bug does not exist
+today and will be introduced the day somebody "improves" the write path.
+
+Also: `save()` returns a `Bool` that `createIfMissing()` (`Zone.swift:122-125`)
+discards. Let the error surface.
+
+### c) Fallback goes to the factory layout instead of the last good one
+
+`Zone.swift:139`: `layout = ZoneStore.read(url) ?? .threeColumns`. One line,
+large payoff, and a prerequisite for the editor's `invalid` state.
+
+### d) `Layout` is not `Equatable`
+
+`Zone.swift:58`. `Zone` already is (`Zone.swift:10`). Without it there is no
+change detection, no undo coalescing, and no "this external change is
+semantically identical" shortcut.
+
+### e) The preview lies about where the window will land
+
+`OverlayController.swift:90` draws `box.rect.insetBy(dx: 8, dy: 8)`, but
+`Zone.rect(in:)` (`Zone.swift:19-24`) applies no inset and
+`DragMonitor.swift:194` calls `window.setFrame(target.rect)` with the full rect.
+The gap already exists, hardcoded, on the wrong side. Fix it together with
+`defaults.gap` in Stage 1: the inset comes from config and is applied in
+`rect(in:)`, not in the drawing code.
+
+### f) `ZoneStore` mixes four responsibilities
+
+Path resolution (`Zone.swift:83-87`), I/O (`:105-136`), in-memory state (`:89`)
+and hit-testing (`:148-153`). The path being a `let` initializer makes it
+impossible to write a single test against a temporary directory — which is
+exactly what the conflict cases need, and those are unreliable to test by hand.
+
+### g) The overlay re-reads the singleton on every `mouseDragged`
+
+`OverlayController.swift:22` and `:30` remap the whole array and force
+`needsDisplay` dozens of times per second, inside the event tap callback. Today
+that is only a `tapDisabledByTimeout` candidate — and the detector for that
+already exists at `DragMonitor.swift:121-123`, which is worth noting: the
+instrument was built before the bug. **Once the file watcher is live it becomes
+a correctness bug**, because it lets you draw layout N's zones and snap into
+N+1's. Capture an immutable snapshot at `DragMonitor.swift:138-149`.
+
+### h) Two fragile identities, both of which bite with an external monitor
+
+`OverlayController.swift:9` keys a dictionary by `NSScreen`. AppKit replaces
+those instances on display reconfiguration, so stale entries are never evicted
+and the comparison at `:18` measures dead objects. Use `displayID` — the
+`NSScreenNumber` in `deviceDescription`, verified available.
+
+`OverlayController.swift:36` identifies the active zone with `rectCG == active`.
+It works today because both rects come from the same computation, but it breaks
+with duplicate zones — and with a config file, people **will** duplicate zones —
+and with any rounding the gap introduces.
+
+### i) `createIfMissing()` writes `JSONEncoder` output
+
+`Zone.swift:122-125`. Writing on first launch is right; *what* it writes is not.
+The first thing a user sees when they open that file is the strongest
+documentation this project will ever ship, and today it is alphabetized JSON
+where `height` comes before `name`, with UUIDs in it. It should be the
+hand-written example from §4, as a string literal. The "the file is the truth"
+story starts there or it does not start.
+
+### Also missing
+
+No CI, no tests. `Zone.rect(in:)` and `zone(under:in:)` are pure and testable
+today.
+
+---
+
+## 4. The format decision
+
+**JSON5, extension `.json5`, canonical writer with comment custody.**
+
+### Why JSON5 and not TOML
+
+TOML was the favourite going in, on the strength of AeroSpace's precedent. It
+lost on two concrete counts.
+
+**Zero dependencies.** `JSONDecoder.allowsJSON5` is in Foundation. Comments,
+unquoted keys, single quotes, trailing commas and `.25` all decode with nothing
+added to `Package.swift`. Verified compiling and running against macOS 14.
+`TOMLDecoder` is decode-only, and `TOMLKit` wraps toml++ — C++ interop in an
+executable that has to be signed and notarized.
+
+**And toml++ discards comments when parsing anyway**, so it does not even solve
+the round-trip: the custom writer has to be written either way.
+
+**The syntax does not suit this data.** A zone is four numbers and a name. In
+TOML that is `[[layouts.zones]]` at five lines each — twelve zones become sixty
+lines in which the geometry is invisible — or inline tables, which are JSON5
+with worse rules, since TOML 1.0 forbids newlines inside them and forbids the
+trailing comma. A nested, ordered, homogeneous array is JSON's home ground.
+
+**"Plain JSON without comments for v1" was rejected outright.** A config file
+without comments is not a config file, it is a dump, and it contradicts the
+whole thesis. The real objection behind that suggestion — that accepting `//` on
+read and dropping it on write is worse than not accepting it at all — is
+correct, and is exactly why comment custody is mandatory rather than optional.
+
+**`.json5` and not `.json`**: a file containing `.25` and unquoted keys that
+calls itself `.json` lies to every tool in the world.
+
+### The round-trip: canonical writer, not surgical splicing
+
+The alternative was to splice edited values back into the original text,
+preserving everything untouched. It loses because the zone table is aligned into
+columns — that alignment is what makes the file read like a table and makes
+changing one zone a one-line diff — and **alignment is unsustainable under
+splicing.** Replace `0.25` with `0.3333` and the columns rot; every edit leaves
+the file slightly uglier. Splicing also cannot express add, delete or reorder
+without ad-hoc text surgery, which is a new class of bug per operation.
+
+The social contract is `gofmt`'s: the format is canonical, and `zonas fmt` makes
+it canonical **when you ask**, so the one large reformat is a deliberate,
+reviewable act rather than a surprise.
+
+One component, `LayoutSyntax`, does five jobs: JSON5 tokenizer → ordered tree
+where each node carries its comments (leading, trailing, blank-line-before) →
+from which come (a) the typed model, (b) the canonical render, (c) survival of
+unknown keys, (d) line numbers for schema errors, (e) the tree migrations run
+against.
+
+**The writer must render from the tree, not from the `Codable` structs.** If it
+serializes the typed model, any key that version of the app does not know about
+vanishes silently. The tree keeps it. This also makes migrations fifteen lines
+over a loose tree instead of historical structs living forever.
+
+A working prototype exists — 334 lines, tokenizer + tree + writer + an edit demo
+— at
+`/private/tmp/claude-501/-Users-pablo-devel-projects-fcstudio-projects/49f0eeeb-302f-464b-8a0b-36b2a1a9ac8b/scratchpad/v/final.swift`.
+**That path is temporary and will be cleaned up. Copy it into the repo before
+relying on it.** Measured against a hand-written example file with ASCII
+diagrams and ratios:
+
+```
+1. Foundation JSON5 accepts the output ....... OK
+2. Idempotent: render(parse(render(x))) ...... STABLE byte for byte
+3. Comments 43 in / 43 out ................... 0 lost
+4. After the editor reorders/renames/moves ... 43/43 survived
+5. The edited output parses .................. OK
+```
+
+### The test that is a merge condition
+
+The writer was then **broken on purpose** — trailing-comment handling for arrays
+removed — to see which test caught it:
+
+```
+2. Idempotent ................................ STABLE byte for byte   <-- still passes
+3. Comments 14 in / 12 out ................... LOST: ["// the work one", "// keep it last"]
+```
+
+**Idempotency does not catch comment loss.** The conservation test does, and it
+is five lines: harvest the comments from the original, harvest them from the
+render, the difference must be empty. Without it in CI, the canonical-writer
+design is not recommended at all.
+
+### What it does not preserve, said before someone discovers it
+
+Blank-line grouping beyond one boolean per node, and comments floating where
+there is no node to attach them to (they attach to the following node, by a
+deterministic rule). ASCII diagrams **do** survive — the lexer keeps the text
+verbatim. The document preamble needs its own document-level slot.
+
+### The boundary
+
+**The file carries only what you would want in git.** Which layout is currently
+active, the editor window's position, snapshots — `UserDefaults`, never the
+file. MacsyZones gets this wrong, keeping `currentLayoutName` in the same JSON
+it rewrites on every launch.
+
+---
+
+## 5. The editor
+
+### Full-screen over the real desktop
+
+One window per screen, exactly `screen.visibleFrame`. The strong argument is not
+visual: at 1:1, **one editor point equals one point of the space the zones live
+in**. There is no scaling arithmetic anywhere, and the fraction↔point conversion
+is the same line that already exists in `Zone.rect(in:)`. Less code, not more.
+And `visibleFrame` already discounts the menu bar, the Dock and the notch, so
+the notch is handled without writing anything.
+
+A scaled editor lies. At 3.56:1 it lies unusably.
+
+Behind it goes **the real desktop dimmed to 40%** — a translucent fill, not a
+screenshot. A screenshot would need Screen Recording permission, which would be
+an adoption disaster for an app that already fights for Accessibility.
+
+**The highest-value reuse in the existing code:** `OverlayController` already
+draws zones full-screen, per screen, with `Coords` solved. The editor is that
+same code with `ignoresMouseEvents = false`, hit-testing and handles. The deltas
+are keyboard (needs an `NSWindow` subclass with `canBecomeKey → true`), focus
+while `.accessory` (`NSApp.activate()` before `makeKeyAndOrderFront`; do **not**
+switch to `.regular`, it bounces the Dock), Spaces (**no** `.canJoinAllSpaces`,
+unlike the drag overlay — the editor stays on the active Space), and
+**suspending `DragMonitor`'s event tap while the editor is open**, or Shift
+inside the editor fires the drag overlay and the two fight.
+
+Levels: the editor goes at `.floating` (3), *below* the menu bar, so you can see
+the strip you are excluding. The drag overlay stays at `.popUpMenu` (101)
+because it has to cover the window being moved.
+
+Estimate: 400–600 lines of AppKit on a base that already knows half of it.
+
+**AppKit, not SwiftUI**, for a concrete reason: in AppKit the view that received
+`mouseDown` keeps receiving `mouseDragged` even when the cursor leaves its
+bounds. SwiftUI's `DragGesture` on macOS is interrupted without calling
+`onEnded` when the cursor exits the frame. Dragging a divider across 5120 px,
+that is fatal — and a zone editor is almost entirely dragging things fast and
+far.
+
+### The interaction
+
+**Primary gesture: a click splits a zone in two.** Hovering shows the cut line
+following the cursor; **⇧ rotates the axis**. It is FancyZones' Grid gesture,
+proven, and Shift is already this app's vocabulary. The default axis is
+perpendicular to the longest side, so on 5120×1440 a full-width zone splits
+vertically, and once the columns are taller than they are wide the default flips
+by itself. Consequence: **the five-zone ultrawide template is five clicks with
+no modifier.**
+
+**There is no tree.** Splitting suggests one, but a tree does not fit in the
+file, which is a flat list of rectangles — and putting it there would make the
+file nested and horrible to hand-write, while reconstructing it on load is
+ambiguous and fragile. Instead: **coalescence of collinear edges.** Grabbing an
+edge gathers every edge within 0.5% of the same coordinate, on the same axis,
+with overlapping extent, and moves them together. It is *derived* state,
+recomputed from the file on open, discarded on close. It feels like i3 without
+being i3, and **the one-pixel gap becomes impossible by construction**. **⌥
+breaks coalescence** and moves a single edge, which is how you create a gap or
+an overlap deliberately.
+
+**⌘ + drag** draws a free zone on top, overlapping. This is not a nice-to-have:
+without it the editor would be *less expressive than the file*, since
+`zone(under:in:)` already implements smallest-wins precisely to support
+overlaps. **⌥⇥** cycles the selection through the zones containing the cursor,
+smallest first, so a covered zone can be reached.
+
+**Deleting, three ways on purpose.** The number one complaint about FancyZones
+is that deletion is undiscoverable — there is an issue literally titled "how to
+remove a zone". The cause is that `Delete` acts on the *divider*, not the zone,
+and only from the keyboard. So: click + `⌫`, with the area absorbed by the
+neighbour sharing the longest edge; a **✕** on hover; and dragging a divider
+onto its neighbour collapses the zone between them.
+
+**Typing numbers.** Double-clicking the label opens an inline panel: name, and
+`x y w h` with ⇥. It accepts `1/3`, `0.25`, `25%`, `1280px`, `1/2 - 1/16` — **and
+the file accepts exactly the same.** Snapping uses denominators 2, 3, 4, 5, 6,
+8, 10, 12, 16 — the same ones the format can write — prioritising other zones'
+edges, then rational lines, then screen edges. **⌥ turns snapping off** for
+1 pt resolution. You snap to the grid and the file is written as `1/3`, not
+`0.3333333333333333`.
+
+**Every zone always shows pixels above and its fraction below** — accent colour
+when the fraction is clean, grey decimal when it is not. At a glance you see
+whether your layout is tidy: it is the file thesis made visible inside the GUI.
+
+**Holding `Space`** hides all chrome and leaves thin outlines over the undimmed
+desktop. **There is no separate preview: the screen is the preview**, which
+removes the entire family of "the editor and reality disagree" bugs by removing
+the object that was wrong.
+
+One floating HUD bar: layout name, templates, Revert, Done, and a contextual
+help line that changes with what you are touching. It costs nothing and is the
+direct antidote to the discoverability disaster.
+
+**No OK/Cancel** — the file has been written as you go. The safety nets are the
+snapshot taken on open (Revert), a backup ring, and ⌘Z.
+
+**Templates are JSON5 files in `Resources/`, in exactly the format a user hand-
+writes**, with a "View as text" button that copies to the clipboard. They are
+the format's documentation and cannot drift from it, because they are it.
+
+### Identity without `id`
+
+Identity is stable **in memory**, not in the file. The editor holds
+`EditZone { let rid: Int; var name; var x, y, w, h }`; `rid` is minted on load,
+drives selection, dragging, undo and comment custody, and **never reaches the
+file**. This works because the file is not the authority on identity *during* an
+editing session — the in-memory document is. Between sessions there is nothing
+to track: nobody needs undo across a relaunch.
+
+In the file the handle is `name`, unique within its layout, validated with a
+line number. That is not awkward: the overlay already draws the name over the
+zone (`OverlayController.swift:118`), so two zones called "Left" are already a
+UX bug. Making `name` required also deletes `init(from:)`
+(`Zone.swift:44-54`) — twenty-five lines that exist only because of `id`.
+
+---
+
+## 6. The bet
+
+One feature, and it is the only one on the list where the file is not a
+convenient input but **the only reasonable one**: when you configure, the
+monitor is not plugged in. A GUI can only offer a dropdown of what is attached
+right now; the file describes the world as it will be.
+
+> **Your window layout is a file that lives in your dotfiles and knows which
+> monitor it is on — including the ones you do not have plugged in right now.**
+
+This is the office-dock / home-dock / laptop-alone story, which is the most
+common multi-monitor reality on a Mac. MacsyZones solves it by remembering a
+selection indexed by position in the screens array, which breaks silently when
+monitors are reordered. That is not a feature-list bullet: **it is a
+demonstrable "we are better" that you prove by unplugging something.** And it
+costs ~150 lines on top of multi-layout, which makes it defensible as a bet
+rather than a two-month plan.
+
+The two rejected candidates: live reload (edit in vim, zones move) is **table
+stakes for the thesis, not the bet** — it is the GIF, it is what makes the
+tagline credible, but it is not a reason to migrate. And "the format is pretty"
+is not a feature, it is a precondition.
+
+**Mandatory corollary:** `zonas monitors` / *Copy Screen Info* in the menu.
+AeroSpace has `list-monitors` and FancyZones has `get-monitors` for exactly this
+reason — without it the user does not know what string to write, and the whole
+feature is unusable. Config-first does not mean guess.
+
+---
+
+## 7. The staged plan
+
+A "day" is a real, focused working day. With a job in the way, roughly half a
+calendar week. **Every stage ships on its own.**
+
+### Stage 1 — "The file is really the truth" · 8 days · start here
+
+| Piece | Days |
+|---|---|
+| Model cleanup (all of §3) | 1 |
+| `LayoutSyntax`: tokenizer + tree + canonical writer, **with tests 1–6** | 3 |
+| `LayoutFile` + `LayoutWatcher` (two sources, retry, symlinks) + `LayoutStore` `@MainActor` | 1.5 |
+| Migration `layout.json` v0 → `zonas.json5` v1 with backup; XDG paths with an ambiguity error | 1 |
+| `gap`/`margin`/`modifier` actually honoured (fixes the lying preview) | 0.5 |
+| Icon in alerts + `zonas check` / `fmt` / `monitors` | 0.5 |
+| README split into user and contributor + demo GIF | 0.5 |
+
+**Ships:** you edit `~/.config/zonas/zonas.json5` in vim, save, and the zones
+change — with comments, with `1/3` ratios, with errors that name the line, with
+the file in your dotfiles repo and symlinked without the app breaking it.
+
+**Why this is publishable and not scaffolding:** for the dotfiles segment the
+editor is not a gap. AeroSpace has 22,133 stars in three years with no
+configuration GUI at all, against Amethyst's 16,201 in thirteen years doing the
+same thing with one. Publishing here is not publishing an incomplete version: it
+is publishing the complete product for the segment where the differentiator is
+strongest. **The editor comes later to widen the audience, not to make it
+viable.**
+
+### Stage 2 — Distribution · 3 days · parallel with 3 and 4
+
+Notarization, stapling, DMG, GitHub release, Homebrew cask, and the
+**first-launch window**.
+
+The first-launch window is the highest leverage per day in the whole plan. Today
+a stranger installs, sees a dimmed icon, drags with Shift, nothing happens, and
+uninstalls: no UI tells them the permission is missing or what the gesture is,
+and they will not read the log. Budget 2 days for notarization, not 1.
+
+Most of the scripting for this already exists uncommitted — see §1.
+
+### Stage 3 — The bet · 4 days
+
+Multiple layouts, `screens` rules by name/glob/`builtin`/`minWidth`, *Copy Screen
+Info*, and switching layout by pressing a number during a drag (a second
+`.keyDown` tap **enabled only while a modifier drag is in progress** — which
+also avoids the uncomfortable question of an open-source project listening to
+the whole keyboard all the time).
+
+Keep "which layout goes on which monitor" separate from "re-snap windows on
+plug/unplug". The second is another feature, it is expensive and fragile, and
+macOS has already moved your windows before you find out. Do not put them in the
+same promise.
+
+### Stage 4 — Window robustness · 4 days · **before the editor**
+
+Subrole filtering in `AXWindow.at`, per-app minimum sizes, Electron and Java
+(`AXEnhancedUserInterface` has to be turned off during the move in
+Chrome/Electron), fullscreen, a bundle-ID exclusion list.
+
+**The ordering argument is strong:** a beautiful editor for an app that cannot
+move your Chrome window is worse than the reverse. The editor is used once a
+month; snapping is used a hundred times a day. This is also the stage that
+prevents the "doesn't work with my app" bucket of issues, which is what sinks a
+new repo's reputation.
+
+### Stage 5 — The visual editor · 12 days
+
+| Piece | Days |
+|---|---|
+| Interactive overlay mode: handles, edge coalescence, split, ⌘-drag | 5 |
+| Rational snapping, keyboard nudge, numeric panel, px+fraction labels | 2 |
+| The write path through `LayoutSyntax` + undo + conflict banner | 3 |
+| Aspect-ratio templates and per-screen assignment from the editor | 2 |
+
+The 8–10 days usually estimated assume an editor that serializes. The editor
+that **respects the file** is strictly harder, and that difficulty is the price
+of the principle. Worth paying, but budget it rather than discover it.
+
+**Legitimate fallback if 12 days do not fit:** ship a **narrower and excellent**
+editor — split and move edges only, no layout management (that stays in the
+file). 6–7 days, and it is not behind MacsyZones at what people actually do.
+
+### Total: ~31 days plus 20% slack ≈ 37 days
+
+The editor is a third of the project, not the project. A release every 3–4 weeks.
+
+### Critical path
+
+```
+format frozen ──▶ multi-layout ──▶ LayoutSyntax.render ──▶ editor
+  (Stage 1)        (Stage 3)          (Stage 1)           (Stage 5)
+```
+
+---
+
+## 8. How to tell it went wrong
+
+"Both worlds" does not degrade gradually. **It collapses into one**, always by
+the same route: the editor accumulates a capability the file does not have, and
+from then on the file is a dump with better PR.
+
+**S1 — the headline signal is a sentence.** The first time someone asks *"and
+how do I do that from the file?"* and the honest answer is *"you can't"*, it has
+already drifted. The rule that prevents it, and it is also the scope rule that
+avoids designing every feature twice: **the file syntax is written first,
+always, and the editor is a client of that syntax. Never the other way round.**
+
+The inverse asymmetry is healthy and should be stated in the README: everything
+you can do in the editor is expressible in the file, and everything the editor
+writes stays readable — but not every key has a GUI. Per-app rules, monitor
+globs, hooks: file only, and that is fine. The converse is exactly what turns
+preference panes into junk drawers.
+
+**S2 — the comment conservation test is a merge condition**, not a
+nice-to-have. See §4.
+
+---
+
+## 9. Context worth having
+
+### Competitive reality
+
+**MacsyZones** is free, open source, has a visual editor and uses the same Shift
+gesture: 871 stars, 17,635 downloads on its last release, actively developed.
+**SnapZones** — $3.99 on the Mac App Store, launched January 2025, identical
+interaction — was abandoned five weeks later and has no ratings after eighteen
+months.
+
+Demand signal, stated plainly: the three Hacker News posts for FancyZones clones
+on macOS scored 1, 1 and 4 points. Rectangle has 29,617 stars; MacsyZones, the
+leader in "custom zones", has 871. A factor of 34 between "I want to move
+windows" and "I want to draw zones".
+
+**Apple is not the threat.** Three OS releases without going past halves and
+quarters. Two to four years of runway.
+
+### If selling ever comes up
+
+The Mac App Store is closed to this: Apple DTS confirmed in October 2025 that a
+sandboxed app cannot use the Accessibility APIs. Magnet and BetterSnapTool are
+grandfathered from before 2012. Direct distribution is the only channel, which
+is what the Developer ID and the notarization work already set up.
+
+Realistic first-year revenue at $9–12 with no existing audience: **$0–1,500**.
+Against a Uruguayan tax floor of $3,200–5,000/year if formalizing from scratch,
+that is 300–470 sales just to cover the paperwork.
+
+None of which argues against building it. It argues against building it *for the
+money*.
+
+### The cheapest experiment available
+
+Install MacsyZones (`brew install --cask macsyzones`) and use it for a week on
+the ultrawide, doing real work. Then answer two questions:
+
+1. What does Zonas do that this does not, that matters to someone other than me?
+2. When you define zones with its visual editor, does it feel good — or do you
+   think "I would write this faster in a file, and take it to my other machine"?
+
+If the answer to (2) is the second one, the bet in §6 is confirmed and the
+editor drops off the critical path. If it is the first, the file framing is an
+excuse and it is much better to know that before building on it.
+
+### Unresolved
+
+macOS 26 showed a *"Support Ending for Intel-based Apps"* notification while
+universal binaries were being tested. It is not confirmed which binary triggered
+it, or whether a universal binary triggers it at all as opposed to an
+x86_64-only one. **If shipping universal makes every user see that notification
+on first launch, arm64-only is the better trade** — worse than not supporting
+Intel is telling every Apple Silicon user that your app is about to stop
+working. `build.sh` supports both; the decision is still open and should be
+settled before the first public release.
+
+---
+
+## 10. Rules for whoever picks this up
+
+1. **The file syntax is written first. Always.** The editor is a client of it.
+2. **The comment conservation test is a merge condition.** Idempotency does not
+   catch that bug class — this was proven, not assumed.
+3. **The file carries only what belongs in git.** Runtime state goes to
+   `UserDefaults`.
+4. **The writer renders from the tree, never from the `Codable` structs**, or
+   unknown keys vanish silently.
+5. **Nothing outside `/Applications` may talk to `SMAppService`**, not even to
+   read `status`. BTM keeps one entry per bundle id and rewrites its path to
+   whoever asked last. The guard is in `LaunchAtLogin.isInstalledCopy` and it has
+   already earned its keep.
+6. **Never sign ad-hoc when a real identity exists.** See §2.
+7. **When the permission "gets lost", check the signature before anything else.**
+   The app logs its own fingerprint at startup for exactly this.

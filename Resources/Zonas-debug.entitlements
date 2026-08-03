@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  DEBUGGING ONLY. This file must never reach a build that goes to the notary
+  service: `get-task-allow` is on Apple's rejection list by name, and a
+  submission carrying it comes back Invalid with "The signature includes
+  get-task-allow entitlement".
+
+  It exists because the hardened runtime (`codesign --options runtime`, which
+  build.sh now always applies) is what stops any process from attaching to this
+  one — lldb included. Without this entitlement, `lldb -p $(pgrep Zonas)` answers
+  with a permission error and no explanation.
+
+  Opt in explicitly, one build at a time:
+
+      ZONAS_DEBUG_ENTITLEMENTS=1 ./build.sh -r
+
+  release.sh refuses to publish anything whose signature carries entitlements,
+  so an accident here fails loudly and locally instead of two minutes into an
+  upload.
+
+  Nothing else belongs in this file. Zonas ships with ZERO entitlements: moving
+  other applications' windows is governed by TCC —the Accessibility toggle the
+  user flips— and not by any entitlement. There is no accessibility entitlement
+  for third-party apps, whatever the top Google result for "hardened runtime
+  accessibility" says, and `NSAccessibilityUsageDescription` is not a real key
+  either. The myth survives because `codesign` embeds invented keys without
+  complaining, so nothing ever tells you it did nothing.
+
+  The comment sits AFTER the DOCTYPE for a reason. codesign does not parse
+  entitlements with the normal plist parser but with AMFI's, and a comment
+  before the DOCTYPE makes it fail with `Failed to parse entitlements:
+  AMFIUnserializeXML: syntax error near line 8` — while `plutil -lint` calls the
+  very same file OK.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.get-task-allow</key>
+	<true/>
+</dict>
+</plist>
