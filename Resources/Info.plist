@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Zonas</string>
+	<key>CFBundleDisplayName</key>
+	<string>Zonas</string>
+	<key>CFBundleExecutable</key>
+	<string>Zonas</string>
+	<key>CFBundleIdentifier</key>
+	<string>uy.com.fcstudio.zonas</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleIconFile</key>
+	<string>Zonas</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>FcStudio</string>
+	<!-- Sin ícono en el Dock: la app vive en la barra de menú. -->
+	<key>LSUIElement</key>
+	<true/>
+</dict>
+</plist>
