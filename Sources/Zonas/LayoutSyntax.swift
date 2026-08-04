@@ -280,7 +280,23 @@ enum LayoutSyntax {
         for element in elements {
             guard case .object(let members) = element.node,
                   members.count <= 6,
-                  members.allSatisfy({ isScalar($0.node) }) else { return nil }
+                  members.allSatisfy({ isScalar($0.node) }),
+                  // A comment on a key *inside* a row cannot be written on one
+                  // line: a leading one has nowhere to go and a trailing one
+                  // would comment out the rest of the row. So a row carrying one
+                  // is a row that cannot be a row, and the whole array drops to
+                  // block style.
+                  //
+                  // Found by breaking the editor's writer on purpose. Before
+                  // this, a comment in that position was dropped by the renderer
+                  // itself — the conservation check caught it and `zonas fmt`
+                  // refused to write the file, with a message saying it was a
+                  // bug in Zonas rather than in your file. It was. The cost is
+                  // that annotating one zone costs the whole table its
+                  // alignment, and that is the right way round: alignment is a
+                  // convenience and the comment is somebody's sentence.
+                  members.allSatisfy({ $0.comments.leading.isEmpty
+                                       && $0.comments.trailing == nil }) else { return nil }
             keySets.insert(members.map(\.key).sorted())
             for member in members {
                 widths[member.key] = max(widths[member.key] ?? 0, scalar(member.node).count)

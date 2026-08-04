@@ -99,6 +99,19 @@ struct EditorDocument: Equatable {
     let margin: CGFloat
     let modifier: Modifier
 
+    /// How many zones this document was built from.
+    ///
+    /// It exists for the writer. `rid` is minted as the zone's index in that
+    /// original list, so a zone whose `rid` is below this number came out of the
+    /// file and has a syntax node — and therefore comments — waiting for it at
+    /// that index. Above it, the zone was made in this session and has nothing
+    /// to preserve.
+    ///
+    /// That invariant is the whole of the mapping between an edited document and
+    /// the text it will be written back into, so it is stated here rather than
+    /// rediscovered in `LayoutWriter`.
+    let originalCount: Int
+
     private var nextRid: Int
     private var history: [[EditZone]] = []
 
@@ -114,6 +127,7 @@ struct EditorDocument: Equatable {
                      x: zone.x, y: zone.y, width: zone.width, height: zone.height)
         }
         nextRid = zones.count
+        originalCount = zones.count
         name = layout.name
         gap = layout.gap
         margin = layout.margin
