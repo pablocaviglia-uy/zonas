@@ -236,6 +236,43 @@ struct LayoutWriterTests {
         #expect(widths.reduce(0, +) == 1)
     }
 
+    /// Dragging one divider used to rewrite every number in the file: a zone
+    /// nobody had touched went from `0.75` to `"3/4"` — the same number, spelled
+    /// the way this writer prefers rather than the way its author wrote it.
+    /// `LayoutSyntax` promises that `.25` stays `.25`, and a writer that
+    /// restyles the untouched half of the file breaks that promise from the
+    /// other end.
+    @Test("A zone nobody touched is left exactly as it was written")
+    func untouchedZonesKeepTheirSpelling() throws {
+        let text = """
+        {
+          version: 1,
+          name: "L",
+          zones: [
+            { name: "A", x: 0,    y: 0, width: .25,   height: 1 },
+            { name: "B", x: .25,  y: 0, width: "25%", height: 1 },
+            { name: "C", x: 0.50, y: 0, width: 0.50,  height: 1 },
+          ],
+        }
+        """
+        var doc = try document(text)
+        // Move the line between B and C only.
+        let edge = doc.edge(along: .vertical, near: 0.5, across: 0.5, within: 0.01)!
+        doc.move(edge, to: 5.0 / 8, minimum: 0.01)
+
+        let written = try LayoutWriter.apply(doc, to: text)
+
+        // Padding moves when a column gets wider, so the assertions are about
+        // the spellings and not about the spaces between them.
+        #expect(written.contains("width: .25"))     // A's width, verbatim — never touched
+        #expect(written.contains("x: .25"))         // B's x, verbatim — the line moved, not this
+        #expect(written.contains("x: 0,"))          // and A's x is still a bare nought
+        #expect(!written.contains("\"25%\""))       // B's width did move
+        #expect(written.contains("width: \"3/8\""))  // ...and reads as the fraction it now is
+        #expect(written.contains("x: \"5/8\""))     // C's origin moved with it
+        #expect(!written.contains("0.50"))
+    }
+
     @Test("Nought and one are written as numbers, not as ratios")
     func wholeNumbersStayWhole() throws {
         var doc = try document()

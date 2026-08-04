@@ -122,15 +122,42 @@ enum LayoutWriter {
             ("height", self.node(for: zone.height)),
         ]
         for (key, value) in values {
-            if let index = members.firstIndex(where: { $0.key == key }) {
-                // Only the node changes. The member keeps its comments, so
-                // `// the work one` written beside a width stays beside it.
-                members[index].node = value
-            } else {
+            guard let index = members.firstIndex(where: { $0.key == key }) else {
                 members.append(LayoutSyntax.Member(key: key, node: value))
+                continue
             }
+            // **A value that has not changed is not rewritten**, and it is worth
+            // being firm about because the first version was not.
+            //
+            // Dragging one divider rewrote every number in the file: a zone
+            // nobody had touched went from `0.75` to `"3/4"`, which is the same
+            // number spelled the way this writer prefers rather than the way its
+            // author wrote it. `LayoutSyntax` already promises that `.25` stays
+            // `.25` — keeping numbers verbatim is the first thing `Node.number`
+            // says — and a writer that quietly restyles the untouched half of
+            // the file is breaking that promise from the other end.
+            //
+            // So the original node stays unless it means something else now.
+            guard !means(members[index].node, value) else { continue }
+            // Only the node changes. The member keeps its comments, so a note
+            // written beside a width stays beside it.
+            members[index].node = value
         }
         return .object(members)
+    }
+
+    /// Whether a node already says exactly what we were about to write.
+    ///
+    /// Compared as values and not as text, because `0.25`, `.25`, `"1/4"` and
+    /// `"25%"` are four spellings of one number and all four are the author's
+    /// business rather than ours.
+    private static func means(_ node: LayoutSyntax.Node, _ replacement: LayoutSyntax.Node) -> Bool {
+        if case .string(let existing) = node, case .string(let new) = replacement {
+            return existing == new
+        }
+        guard let existing = Zone.fraction(of: node),
+              let new = Zone.fraction(of: replacement) else { return false }
+        return existing == new
     }
 
     /// How a number goes into the file.

@@ -2,14 +2,17 @@ import AppKit
 
 /// The zone editor: one window per screen, over the real desktop, at 1:1.
 ///
-/// The first stretch built the window and offered no editing, because
-/// everything hard about an editor is in getting the window up and leaving it
-/// correct and none of that is easier to debug with a gesture on top of it. The
-/// second adds the primary gesture: **a click splits a zone in two**, at the
-/// cursor, with ⇧ rotating the cut.
+/// Built in five stretches: the window, the click that splits, the divider you
+/// drag, the grid it lands on, and the write path. What it does now is all five
+/// — click a zone to cut it, drag a divider to move everything on it, ⌫ or the
+/// ✕ to delete one, and **the file is written as you go**.
 ///
-/// **It still does not write.** Splits change `document` and closing throws it
-/// away — see `EditorDocument`.
+/// **No OK and no Cancel**, which is §5 and is not a convenience. An editor that
+/// holds your changes hostage until you press Save is an editor with its own
+/// private copy of the truth, and the first thing such a copy grows is a
+/// capability the file does not have — which is §8's failure mode, arriving by
+/// the back door. The safety nets instead are ⌘Z, Revert, and a copy of the file
+/// as it was before the session touched it.
 ///
 /// **Full screen at 1:1 rather than a scaled panel**, which is §5's decision
 /// and the reason there is no arithmetic in here: one point in this window is
@@ -39,10 +42,34 @@ final class EditorController {
     /// would do without any chance of that becoming the real one.
     private var document: EditorDocument?
 
-    /// Set when the file changed underneath a document that has been edited.
-    /// See `refresh` — this is the smallest honest version of §5's conflict
-    /// banner, and it exists because splitting made it necessary.
-    private var fileChangedUnderneath = false
+    /// The file's text as it was when this session adopted it.
+    ///
+    /// Every write applies the whole document to **this**, never to the last
+    /// thing written. It is what `rid` indexes into — see
+    /// `EditorDocument.originalCount` — and it is the only copy that still has
+    /// the comments belonging to zones that have since been deleted, which the
+    /// merge condition needs in order to excuse them.
+    ///
+    /// `nil` means the file could not be read or does not parse, and then
+    /// **nothing is written at all**: the store is showing the last layout that
+    /// read cleanly, and saving it over a file somebody is halfway through
+    /// editing would destroy the very thing they are fixing.
+    private var sourceText: String?
+
+    /// What was last put on disk, so that the watcher firing on our own write is
+    /// recognised as an echo rather than reported as somebody else's edit.
+    private var lastWritten: String?
+
+    /// Set when the file changed underneath us and does not match what we wrote.
+    private var conflict = false
+
+    /// True when the file on disk is not canonical, so the first write will
+    /// reformat it. §4 promises that the one large reformat is a deliberate act
+    /// rather than a surprise, and the editor keeping quiet about it would be
+    /// exactly the surprise.
+    private var willReformat = false
+
+    private var hasBackedUp = false
 
     /// Fires on open and on close. It exists because "the editor is up" is not
     /// only the editor's business: the drag monitor has to stop listening while
@@ -58,11 +85,10 @@ final class EditorController {
         // and the screen is still dimmed.
         guard !isOpen else { return activate() }
 
-        // The document is built once, here, from whatever the store holds. From
-        // this moment the editor is working on its own copy — see `refresh` for
-        // what happens when the file moves underneath it.
-        document = EditorDocument(LayoutStore.shared.layout)
-        fileChangedUnderneath = false
+        adopt()
+        conflict = false
+        hasBackedUp = false
+        lastWritten = nil
         build()
         guard !windows.isEmpty else {
             Log.write("editor: not a single screen reported a display ID, not opening")
@@ -83,16 +109,10 @@ final class EditorController {
 
     func close() {
         guard isOpen else { return }
-        if document?.isEdited == true {
-            // Worth a line, because until the last stretch this is where an
-            // editing session goes: nowhere. Silence would make it look like it
-            // had been saved.
-            let count = document?.zones.count ?? 0
-            Log.write("editor: closing with \(count) zone\(count == 1 ? "" : "s") — "
-                      + "nothing is written yet, the file is untouched")
-        }
         tearDown()
         document = nil
+        sourceText = nil
+        lastWritten = nil
         isOpen = false
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
@@ -100,26 +120,56 @@ final class EditorController {
         Log.write("editor: closed")
     }
 
+    /// Takes the file as it is now: its text, and the document built from it.
+    ///
+    /// The text matters as much as the layout. It is what every write is applied
+    /// to, so it has to be the file the `rid`s index into — and the only copy
+    /// that still holds the comments of zones the session goes on to delete.
+    private func adopt() {
+        let url = LayoutStore.shared.fileURL
+        let text = try? String(contentsOf: url, encoding: .utf8)
+
+        // Parsed here rather than trusted, because the store falls back to the
+        // last layout that read cleanly and will happily hand one over for a
+        // file that is currently a syntax error. Writing that back would
+        // overwrite whatever the user is halfway through typing.
+        if let text, let parsed = try? LayoutSyntax.parse(text), let layout = try? Layout(parsed) {
+            sourceText = text
+            willReformat = LayoutSyntax.render(parsed) != text
+            document = EditorDocument(layout)
+        } else {
+            sourceText = nil
+            willReformat = false
+            document = EditorDocument(LayoutStore.shared.layout)
+        }
+    }
+
     /// The file changed while the editor was open.
     ///
-    /// **Once you have split something, the document wins.** Following the file
-    /// was free in the first stretch because the editor held nothing of its own;
-    /// now it does, and replacing an edited document with a reload would throw
-    /// away work in response to something happening on another screen.
+    /// The first thing this asks is whether the change is **ours**. The editor
+    /// writes as you go, every write wakes the watcher, and an editor that
+    /// reported its own saves as somebody else's edits would raise a conflict
+    /// banner every time you dragged a divider. Comparing the bytes rather than
+    /// the layout is what makes that reliable: a value written with six decimals
+    /// reads back a hair different, so "is the layout equal" would say no to our
+    /// own file.
     ///
-    /// So: an untouched editor keeps following the file, which is the live
-    /// reload this whole project is about. An edited one stops, and says so in
-    /// the bar rather than diverging quietly. That is the smallest honest
-    /// version of §5's conflict banner, and stretch 2 is what made it necessary
-    /// rather than optional — the full thing, with a way to take the file's
-    /// side, belongs with the write path.
+    /// Otherwise it is a real edit from outside, and **the document wins,
+    /// loudly**. Silently taking the file's side would throw away work in
+    /// response to something happening on another screen; silently keeping ours
+    /// would let the two drift apart with no sign. So the bar says so and offers
+    /// both answers — which is §5's conflict banner, and the write path is what
+    /// made it more than a warning.
     func refresh() {
         guard isOpen, let current = document else { return }
 
-        if current.isEdited {
-            fileChangedUnderneath = true
+        let onDisk = try? String(contentsOf: LayoutStore.shared.fileURL, encoding: .utf8)
+        if let onDisk, onDisk == lastWritten { return }
+
+        if current.isEdited || conflict {
+            conflict = true
         } else {
-            document = EditorDocument(LayoutStore.shared.layout)
+            adopt()
         }
         render()
     }
@@ -142,6 +192,9 @@ final class EditorController {
                 self?.move(edge, to: coordinate, minimum: minimum)
             }
             window.onDelete = { [weak self] rid in self?.delete(rid: rid) }
+            window.onRevert = { [weak self] in self?.revert() }
+            window.onKeepMine = { [weak self] in self?.keepMine() }
+            window.onUseTheFile = { [weak self] in self?.useTheFile() }
             windows[display] = window
         }
         render()
@@ -157,6 +210,9 @@ final class EditorController {
             window.onSplit = nil
             window.onMove = nil
             window.onDelete = nil
+            window.onRevert = nil
+            window.onKeepMine = nil
+            window.onUseTheFile = nil
             window.orderOut(nil)
         }
         windows.removeAll()
@@ -167,12 +223,31 @@ final class EditorController {
     /// Every screen draws the same document, so every screen is redrawn.
     private func render() {
         guard let document else { return }
-        let note = fileChangedUnderneath
-            ? "⚠︎ the file changed while you were editing — this is your version"
-            : LayoutStore.shared.problem.map { "⚠︎ \($0) — showing the last layout that read cleanly" }
         for window in windows.values {
-            window.editorView?.show(document, note: note)
+            window.editorView?.show(document, note: note(for: document),
+                                    canRevert: document.isEdited && sourceText != nil,
+                                    inConflict: conflict)
         }
+    }
+
+    private func note(for document: EditorDocument) -> String? {
+        if conflict {
+            return "⚠︎ the file changed while you were editing — nothing is saved until you choose"
+        }
+        if sourceText == nil {
+            // The one state where the editor deliberately does nothing to the
+            // file. Saying only "the file has an error" would leave you to
+            // discover the rest by finding your edits gone.
+            let problem = LayoutStore.shared.problem ?? "the file cannot be read"
+            return "⚠︎ \(problem) — showing the last good layout, and saving nothing"
+        }
+        if willReformat, !document.isEdited {
+            // Before the first edit, not after: §4 promises the one large
+            // reformat is a deliberate act, and this is the moment it is still
+            // avoidable by pressing ⎋.
+            return "editing will also tidy this file's formatting · a copy is kept as .bak"
+        }
+        return nil
     }
 
     private func split(rid: Int, at fraction: Double, _ cut: Cut, minimum: Double) {
@@ -180,6 +255,7 @@ final class EditorController {
         guard document.split(rid: rid, at: fraction, cut, minimum: minimum) else { return }
         self.document = document
         Log.write("editor: split into \(document.zones.count) zones")
+        save()
         render()
     }
 
@@ -191,6 +267,7 @@ final class EditorController {
         self.document = document
         Log.write("editor: moved a \(edge.axis == .vertical ? "vertical" : "horizontal") line "
                   + "carrying \(edge.zoneCount) zone(s)")
+        save()
         render()
     }
 
@@ -198,23 +275,116 @@ final class EditorController {
         guard var document, document.delete(rid: rid) else { return }
         self.document = document
         Log.write("editor: deleted a zone, \(document.zones.count) left")
+        save()
         render()
     }
 
     private func undo() {
         guard var document, document.undo() else { return }
         self.document = document
+        save()
+        render()
+    }
 
-        // Undoing back to the start makes the document untouched again, and an
-        // untouched document is one that follows the file. **Following it means
-        // re-reading it here**, not at the next save: the file may well have
-        // moved while the document was refusing to listen, and clearing the
-        // warning while still showing the old version would be the same lie the
-        // warning was put there to avoid.
-        if !document.isEdited {
-            fileChangedUnderneath = false
-            self.document = EditorDocument(LayoutStore.shared.layout)
+    // MARK: - Writing
+
+    /// §5: **no OK and no Cancel — the file has been written as you go.**
+    ///
+    /// That is not a convenience, it is the whole relationship between this
+    /// editor and the file. An editor that holds your changes hostage until you
+    /// press Save is an editor with its own private copy of the truth, and the
+    /// first thing such a copy grows is a capability the file does not have.
+    /// The safety nets are the ones §5 names: ⌘Z, Revert, and a copy of the
+    /// file as it was before the session touched it.
+    private func save() {
+        // **Not while there is a question on the bar.** Writing during a
+        // conflict would answer it "keep mine" without anybody choosing, and the
+        // case that makes it serious is the ordinary one: you switch to vim,
+        // save the file half-typed, come back, and nudge a divider. Saving there
+        // would put this session's layout over the top of what you were in the
+        // middle of writing. Edits go on piling up in memory; Keep Mine writes
+        // them the moment you say so.
+        guard !conflict, let document, let source = sourceText else { return }
+        do {
+            let text = try LayoutWriter.apply(document, to: source)
+            guard text != lastWritten else { return }
+            backUp()
+            try LayoutFile.write(Data(text.utf8), to: LayoutStore.shared.fileURL)
+            lastWritten = text
+            willReformat = false
+        } catch let refusal as LayoutWriter.Refused {
+            // The same answer `zonas fmt` gives, for the same reason: better to
+            // say "this is a bug in Zonas" than to hand back a file quietly
+            // missing a line somebody typed. Editing carries on in memory; the
+            // file is simply left alone.
+            Log.write("editor: REFUSING to write — \(refusal)")
+            refusal.lost.forEach { Log.write("editor:     lost: \($0)") }
+            Log.write("editor: this is a bug in Zonas, not in your file")
+        } catch {
+            Log.write("editor: FAILED to write — \(error)")
         }
+    }
+
+    /// One copy of the file as it was before this session, taken just before the
+    /// first write.
+    ///
+    /// Before the first write, rather than on open: opening the editor to look
+    /// at your zones should not touch the disk at all.
+    private func backUp() {
+        guard !hasBackedUp, let source = sourceText else { return }
+        hasBackedUp = true
+        let url = LayoutStore.shared.fileURL.resolvingSymlinksInPath()
+            .appendingPathExtension("bak")
+        do {
+            try Data(source.utf8).write(to: url, options: .atomic)
+            Log.write("editor: kept a copy of the file as it was at \(url.path)")
+        } catch {
+            Log.write("editor: could not write the backup — \(error)")
+        }
+    }
+
+    // MARK: - The three answers
+
+    /// Back to the file as it was when the editor opened — **byte for byte**.
+    ///
+    /// Writing the original text back rather than re-rendering the original
+    /// document is the difference between "your file as you left it" and "your
+    /// file, tidied". Revert is the button you press when you want the first.
+    func revert() {
+        guard let source = sourceText else { return }
+        try? LayoutFile.write(Data(source.utf8), to: LayoutStore.shared.fileURL)
+        lastWritten = source
+        conflict = false
+        adopt()
+        Log.write("editor: reverted to the file as it was when the editor opened")
+        render()
+    }
+
+    /// Keep this session's version, and put the file that arrived while we were
+    /// working somewhere it can be got back from.
+    func keepMine() {
+        guard sourceText != nil else { return }
+        if let theirs = try? String(contentsOf: LayoutStore.shared.fileURL, encoding: .utf8),
+           theirs != lastWritten {
+            let url = LayoutStore.shared.fileURL.resolvingSymlinksInPath()
+                .appendingPathExtension("theirs")
+            try? Data(theirs.utf8).write(to: url, options: .atomic)
+            Log.write("editor: the other version is at \(url.path)")
+        }
+        conflict = false
+        lastWritten = nil          // force the write through
+        save()
+        Log.write("editor: kept this session's version")
+        render()
+    }
+
+    /// Take what is in the file now and start again from it. Everything since
+    /// the editor opened goes, which is what the button says.
+    func useTheFile() {
+        conflict = false
+        adopt()
+        lastWritten = nil
+        Log.write("editor: took the file's version, discarding this session's edits")
         render()
     }
 
@@ -273,6 +443,9 @@ final class EditorWindow: NSWindow {
     var onSplit: ((_ rid: Int, _ fraction: Double, _ cut: Cut, _ minimum: Double) -> Void)?
     var onMove: ((_ edge: EditorEdge, _ to: Double, _ minimum: Double) -> Void)?
     var onDelete: ((_ rid: Int) -> Void)?
+    var onRevert: (() -> Void)?
+    var onKeepMine: (() -> Void)?
+    var onUseTheFile: (() -> Void)?
 
     var editorView: EditorView? { contentView as? EditorView }
 
@@ -367,6 +540,12 @@ final class EditorWindow: NSWindow {
         // reading it from the block would then find nothing to call.
         DispatchQueue.main.async { [onCancel] in onCancel?() }
     }
+
+    // These three rebuild the document under the bar that is sending the action,
+    // so they take the same run loop turn out of the way that `cancel` does.
+    @objc func revert(_ sender: Any?) { DispatchQueue.main.async { [onRevert] in onRevert?() } }
+    @objc func keepMine(_ sender: Any?) { DispatchQueue.main.async { [onKeepMine] in onKeepMine?() } }
+    @objc func useTheFile(_ sender: Any?) { DispatchQueue.main.async { [onUseTheFile] in onUseTheFile?() } }
 }
 
 // MARK: - The drawing
@@ -462,6 +641,8 @@ final class EditorView: NSView {
     private let hud = EditorHUD()
     private var document: EditorDocument?
     private var note: String?
+    private var canRevert = false
+    private var inConflict = false
 
     /// Last known cursor position in view coordinates, and whether ⇧ is down.
     /// Both are kept rather than read from the current event, because the two
@@ -485,9 +666,11 @@ final class EditorView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("Zonas builds its windows in code") }
 
-    func show(_ document: EditorDocument, note: String?) {
+    func show(_ document: EditorDocument, note: String?, canRevert: Bool, inConflict: Bool) {
         self.document = document
         self.note = note
+        self.canRevert = canRevert
+        self.inConflict = inConflict
         // The document just changed under the cursor, so what the mouse would
         // do has changed with it.
         recomputePending()
@@ -575,7 +758,8 @@ final class EditorView: NSView {
             // the file is broken or has moved underneath you, that is the only
             // thing on this bar worth reading.
             hint: note ?? "\(zones) · \(Int(area.width)) × \(Int(area.height)) usable",
-            keys: keys(document))
+            keys: keys(document),
+            canRevert: canRevert, inConflict: inConflict)
         if changed { layOutHUD() }
     }
 
@@ -1078,6 +1262,12 @@ final class EditorHUD: NSVisualEffectView {
     /// problem costs three labels.
     private let keysLabel = NSTextField(labelWithString: "")
     private let doneButton = NSButton(title: "Done", target: nil, action: nil)
+    /// §5's HUD: "layout name, templates, Revert, Done". Templates belong to the
+    /// wider editor; the other two are here, and the conflict adds the two
+    /// answers to the question the bar is asking.
+    private let revertButton = NSButton(title: "Revert", target: nil, action: nil)
+    private let keepButton = NSButton(title: "Keep Mine", target: nil, action: nil)
+    private let useFileButton = NSButton(title: "Use the File", target: nil, action: nil)
 
     init() {
         super.init(frame: .zero)
@@ -1103,14 +1293,19 @@ final class EditorHUD: NSVisualEffectView {
         keysLabel.font = .systemFont(ofSize: 11)
         keysLabel.textColor = .tertiaryLabelColor
 
-        doneButton.bezelStyle = .rounded
+        for button in [doneButton, revertButton, keepButton, useFileButton] {
+            button.bezelStyle = .rounded
+        }
+        // Everything but Done starts away. They come back when there is
+        // something to revert or a conflict to answer.
+        for button in [revertButton, keepButton, useFileButton] { button.isHidden = true }
 
         let text = NSStackView(views: [titleLabel, hintLabel, keysLabel])
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 1
 
-        let row = NSStackView(views: [text, doneButton])
+        let row = NSStackView(views: [text, useFileButton, keepButton, revertButton, doneButton])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 24
@@ -1132,8 +1327,15 @@ final class EditorHUD: NSVisualEffectView {
     /// window, and the window does not exist until after its content view does.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        doneButton.target = window
-        doneButton.action = #selector(EditorWindow.cancel(_:))
+        for (button, action) in [
+            (doneButton, #selector(EditorWindow.cancel(_:))),
+            (revertButton, #selector(EditorWindow.revert(_:))),
+            (keepButton, #selector(EditorWindow.keepMine(_:))),
+            (useFileButton, #selector(EditorWindow.useTheFile(_:))),
+        ] {
+            button.target = window
+            button.action = action
+        }
     }
 
     /// Returns whether anything actually changed, so that the view can skip
@@ -1141,13 +1343,23 @@ final class EditorHUD: NSVisualEffectView {
     /// help line is contextual, and re-measuring three labels sixty times a
     /// second to arrive at the same three strings is work worth not doing.
     @discardableResult
-    func show(title: String, hint: String, keys: String) -> Bool {
-        guard titleLabel.stringValue != title
+    func show(title: String, hint: String, keys: String,
+              canRevert: Bool, inConflict: Bool) -> Bool {
+        // Hiding rather than removing: `NSStackView` takes a hidden view out of
+        // the layout, so the bar shrinks back to Done on its own.
+        let buttonsChanged = revertButton.isHidden != !canRevert
+            || keepButton.isHidden != !inConflict
+        guard buttonsChanged
+                || titleLabel.stringValue != title
                 || hintLabel.stringValue != hint
                 || keysLabel.stringValue != keys else { return false }
+
         titleLabel.stringValue = title
         hintLabel.stringValue = hint
         keysLabel.stringValue = keys
+        revertButton.isHidden = !canRevert
+        keepButton.isHidden = !inConflict
+        useFileButton.isHidden = !inConflict
         needsLayout = true
         return true
     }
