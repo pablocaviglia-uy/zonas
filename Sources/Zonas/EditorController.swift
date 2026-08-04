@@ -87,7 +87,8 @@ final class EditorController {
             // Worth a line, because until the last stretch this is where an
             // editing session goes: nowhere. Silence would make it look like it
             // had been saved.
-            Log.write("editor: closing with \(document?.zones.count ?? 0) zones — "
+            let count = document?.zones.count ?? 0
+            Log.write("editor: closing with \(count) zone\(count == 1 ? "" : "s") — "
                       + "nothing is written yet, the file is untouched")
         }
         tearDown()
@@ -140,6 +141,7 @@ final class EditorController {
             window.onMove = { [weak self] edge, coordinate, minimum in
                 self?.move(edge, to: coordinate, minimum: minimum)
             }
+            window.onDelete = { [weak self] rid in self?.delete(rid: rid) }
             windows[display] = window
         }
         render()
@@ -154,6 +156,7 @@ final class EditorController {
             window.onUndo = nil
             window.onSplit = nil
             window.onMove = nil
+            window.onDelete = nil
             window.orderOut(nil)
         }
         windows.removeAll()
@@ -188,6 +191,13 @@ final class EditorController {
         self.document = document
         Log.write("editor: moved a \(edge.axis == .vertical ? "vertical" : "horizontal") line "
                   + "carrying \(edge.zoneCount) zone(s)")
+        render()
+    }
+
+    private func delete(rid: Int) {
+        guard var document, document.delete(rid: rid) else { return }
+        self.document = document
+        Log.write("editor: deleted a zone, \(document.zones.count) left")
         render()
     }
 
@@ -262,6 +272,7 @@ final class EditorWindow: NSWindow {
     var onUndo: (() -> Void)?
     var onSplit: ((_ rid: Int, _ fraction: Double, _ cut: Cut, _ minimum: Double) -> Void)?
     var onMove: ((_ edge: EditorEdge, _ to: Double, _ minimum: Double) -> Void)?
+    var onDelete: ((_ rid: Int) -> Void)?
 
     var editorView: EditorView? { contentView as? EditorView }
 
@@ -327,6 +338,11 @@ final class EditorWindow: NSWindow {
            event.charactersIgnoringModifiers?.lowercased() == "z" {
             return onUndo?() ?? ()
         }
+        // 51 is ⌫ and 117 is the forward delete on a full keyboard, which is
+        // the key the same finger reaches for on that layout.
+        if event.keyCode == 51 || event.keyCode == 117 {
+            return editorView?.deleteZoneUnderCursor() ?? ()
+        }
         super.keyDown(with: event)
     }
 
@@ -361,6 +377,12 @@ final class EditorView: NSView {
     struct Box {
         let rect: CGRect
         let name: String
+        /// The zone's own fractions, carried alongside the points so the label
+        /// can show both. They are not derivable from `rect`: that one has the
+        /// gap taken out of it, and `1/4` minus four points is not a fraction of
+        /// anything.
+        let width: Double
+        let height: Double
     }
 
     /// What the mouse right now would do.
@@ -384,6 +406,10 @@ final class EditorView: NSView {
         /// draw, in view coordinates.
         case split(rid: Int, cut: Cut, fraction: Double, line: CGRect)
         case edge(EditorEdge, line: CGRect)
+        /// The ✕ in a zone's corner. It wins over both of the above inside its
+        /// own small rectangle, which is the ordinary rule that an explicit
+        /// control beats an implicit band.
+        case remove(rid: Int, box: CGRect)
     }
 
     /// A line being held. The seed is what was under the cursor when it was
@@ -417,6 +443,16 @@ final class EditorView: NSView {
     /// sides: near a boundary a click cannot mean "split", and it obviously
     /// means "move this". See `Pending`.
     private static let smallestPiece: CGFloat = 40
+
+    /// How close to a snap target counts as being on it, in points.
+    ///
+    /// The tightest pair of lines in the grid — 3/16 and 1/5 — is 64 points
+    /// apart on the ultrawide and 21 on the laptop, so ten leaves room to aim
+    /// between them on the big screen and very little on the small one. That
+    /// asymmetry is real and is what ⌥ answers.
+    private static let snapRadius: CGFloat = 10
+
+    private static let removeButton: CGFloat = 22
 
     /// The screen's usable area in CG coordinates. Zones are fractions of this,
     /// and this view covers exactly it — that equality is the 1:1 claim, and
@@ -469,7 +505,8 @@ final class EditorView: NSView {
     private func boxes(of document: EditorDocument) -> [Box] {
         let layout = document.layout
         return layout.viewFrames(in: area).enumerated().map {
-            Box(rect: $1, name: layout.zones[$0].name)
+            Box(rect: $1, name: layout.zones[$0].name,
+                width: document.zones[$0].width, height: document.zones[$0].height)
         }
     }
 
@@ -493,6 +530,11 @@ final class EditorView: NSView {
             guard let grab else { return nil }
             guard document.move(edge, to: grab.target,
                                 minimum: minimumFraction(along: edge.axis)) else { return nil }
+        case .remove:
+            // No preview for a delete. The ✕ lights up, the bar says what it
+            // will do, and showing the layout without the zone would mean the
+            // zone vanishing under the pointer that is aimed at it.
+            return nil
         }
         return document
     }
@@ -546,11 +588,13 @@ final class EditorView: NSView {
         let undo = document.canUndo ? " · ⌘Z undo" : ""
         switch pending {
         case .split:
-            return "Click to split · ⇧ rotates the cut\(undo) · ⎋ close"
+            return "Click to split · ⇧ rotates the cut · ⌥ ignores the grid\(undo) · ⎋ close"
         case .edge:
-            return "Drag to move the line · ⌥ moves one side only\(undo) · ⎋ close"
+            return "Drag to move the line · ⌥ moves one side, off the grid\(undo) · ⎋ close"
+        case .remove:
+            return "Click to delete this zone — its neighbour takes the space\(undo) · ⎋ close"
         case nil:
-            return "Click a zone to split it · drag a divider to move it\(undo) · ⎋ close"
+            return "Click a zone to split it · drag a divider · ⌫ deletes\(undo) · ⎋ close"
         }
     }
 
@@ -608,10 +652,21 @@ final class EditorView: NSView {
         // Holding a line: the cursor sets where it goes and nothing else is on
         // offer until it is let go.
         if var grab {
-            grab.target = fractions(of: cursor, along: grab.axis).across
-            self.grab = grab
             guard let edge = resolve(grab) else { return setPending(nil) }
+            let raw = fractions(of: cursor, along: grab.axis).across
+            // The zones on the line are excluded, or it snaps to where it
+            // already is and cannot be moved at all.
+            grab.target = snapped(raw, along: grab.axis,
+                                  ignoring: Set(edge.leading + edge.trailing))
+            self.grab = grab
             return setPending(.edge(edge, line: line(of: edge)))
+        }
+
+        let hits = document.layout.hitRects(in: area)
+        let hovered = Layout.smallestIndex(containing: cursor, in: hits)
+
+        if let hovered, let box = removeBox(of: hovered, in: document), box.contains(cursor) {
+            return setPending(.remove(rid: document.zones[hovered].rid, box: box))
         }
 
         // An edge in reach wins over a cut. See `Pending`.
@@ -619,24 +674,64 @@ final class EditorView: NSView {
             return setPending(.edge(edge, line: line(of: edge)))
         }
 
-        let hits = document.layout.hitRects(in: area)
-        guard let index = Layout.smallestIndex(containing: cursor, in: hits) else {
-            return setPending(nil)
-        }
+        guard let index = hovered else { return setPending(nil) }
         let rect = hits[index]
+        let zone = document.zones[index]
         let cut = shiftHeld ? Cut.default(for: rect).rotated : Cut.default(for: rect)
-        let fraction = fractions(of: cursor, along: cut).across
 
-        let split = Pending.split(
-            rid: document.zones[index].rid, cut: cut, fraction: fraction,
-            line: cut == .vertical
-                ? CGRect(x: cursor.x, y: rect.minY, width: 0, height: rect.height)
-                : CGRect(x: rect.minX, y: cursor.y, width: rect.width, height: 0))
+        let start = cut == .vertical ? zone.x : zone.y
+        let extent = cut == .vertical ? zone.width : zone.height
+        let minimum = minimumFraction(along: cut)
+        let raw = fractions(of: cursor, along: cut).across
+        // Snapping is confined to where the cut is allowed to be. Without that
+        // the grid pulls the line into the refused band and leaves a stripe of
+        // screen where hovering shows nothing and nothing says why.
+        let fraction = start + minimum <= start + extent - minimum
+            ? snapped(raw, along: cut, ignoring: [zone.rid],
+                      to: (start + minimum)...(start + extent - minimum))
+            : raw
+
+        let line = cut == .vertical
+            ? CGRect(x: CGFloat(fraction) * area.width, y: rect.minY, width: 0, height: rect.height)
+            : CGRect(x: rect.minX, y: CGFloat(1 - fraction) * area.height,
+                     width: rect.width, height: 0)
+        let split = Pending.split(rid: zone.rid, cut: cut, fraction: fraction, line: line)
 
         // A cut that would leave a sliver is simply not offered. No line is the
         // whole of the explanation, and it is a better one than a line that does
         // nothing when clicked.
         setPending(candidate(for: split) == nil ? nil : split)
+    }
+
+    /// Ten points, and **⌥ turns it off**.
+    ///
+    /// That is the same modifier that breaks the coalescence, and the two
+    /// belong together: ⌥ means "no assistance". A line held with ⌥ moves one
+    /// side, at one point of resolution, exactly where you put it. Everything
+    /// else in this editor is trying to help you land on a number worth writing
+    /// down, and ⌥ is how you say you had something else in mind.
+    private func snapped(_ raw: Double, along axis: Cut, ignoring rids: Set<Int>,
+                         to range: ClosedRange<Double> = 0...1) -> Double {
+        guard !optionHeld, let document else { return raw }
+        let extent = axis == .vertical ? area.width : area.height
+        return document.snap(raw, along: axis, ignoring: rids,
+                             within: Double(Self.snapRadius / extent), to: range)
+    }
+
+    /// The ✕, in the zone's top corner.
+    ///
+    /// It is `nil` when the zone is too small to hold it without covering what
+    /// it is offering to delete, and when there is only one zone left — which
+    /// cannot be deleted, and a control that refuses is worse than no control.
+    private func removeBox(of index: Int, in document: EditorDocument) -> CGRect? {
+        guard document.zones.count > 1 else { return nil }
+        let frames = document.layout.viewFrames(in: area)
+        guard index < frames.count else { return nil }
+        let frame = frames[index]
+        let size = Self.removeButton, inset: CGFloat = 10
+        guard frame.width > (size + inset) * 2, frame.height > (size + inset) * 2 else { return nil }
+        return CGRect(x: frame.maxX - inset - size, y: frame.maxY - inset - size,
+                      width: size, height: size)
     }
 
     /// The nearest divider within `smallestPiece` points, on either axis.
@@ -748,9 +843,29 @@ final class EditorView: NSView {
             return host?.onMove?(edge, grab.target, minimumFraction(along: edge.axis)) ?? ()
         }
         guard let down = mouseDownAt, hypot(up.x - down.x, up.y - down.y) < 8 else { return }
-        guard case let .split(rid, cut, fraction, _)? = pending else { return }
 
-        host?.onSplit?(rid, fraction, cut, minimumFraction(along: cut))
+        switch pending {
+        case let .split(rid, cut, fraction, _):
+            host?.onSplit?(rid, fraction, cut, minimumFraction(along: cut))
+        case let .remove(rid, _):
+            host?.onDelete?(rid)
+        default:
+            break
+        }
+    }
+
+    /// ⌫ acts on the zone under the cursor, not on a selection.
+    ///
+    /// §5 describes clicking a zone and pressing ⌫, but a click already means
+    /// "split here" — the primary gesture — so there is nothing to select with.
+    /// Everything else in this editor is about what is under the pointer, and
+    /// making the keyboard follow the same rule means there is one thing to
+    /// learn rather than two.
+    func deleteZoneUnderCursor() {
+        guard grab == nil, let document, let cursor else { return }
+        let hits = document.layout.hitRects(in: area)
+        guard let index = Layout.smallestIndex(containing: cursor, in: hits) else { return }
+        host?.onDelete?(document.zones[index].rid)
     }
 
     private func layOutHUD() {
@@ -808,6 +923,20 @@ final class EditorView: NSView {
             draw(box)
         }
 
+        // The ✕ is drawn while the picture is the real document — which is
+        // exactly when the cursor is near the edge of a zone, because that is
+        // where the ✕ is. Aiming a cut in the middle of a zone replaces the
+        // whole picture, and a delete button floating over a layout that does
+        // not exist yet would be pointing at nothing.
+        if previewing == nil, let cursor,
+           let hovered = Layout.smallestIndex(containing: cursor,
+                                              in: document.layout.hitRects(in: area)),
+           let box = removeBox(of: hovered, in: document) {
+            var armed = false
+            if case .remove = pending { armed = true }
+            draw(remove: box, active: armed)
+        }
+
         switch pending {
         case let .split(_, _, _, line) where previewing != nil:
             draw(line, width: 2, capped: false)
@@ -850,27 +979,84 @@ final class EditorView: NSView {
         // of the screen it is drawn on. It is the cheapest possible check that
         // the coordinate work above is right, and it is on screen every time
         // the editor opens rather than only when somebody runs the tests.
-        let size = NSAttributedString(
+        let points = NSAttributedString(
             string: "\(Int(box.rect.width.rounded())) × \(Int(box.rect.height.rounded()))",
             attributes: [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
                 .foregroundColor: NSColor.white.withAlphaComponent(0.45),
             ])
+        let fraction = Self.fractionLabel(box)
 
-        let nameSize = name.size()
-        let sizeSize = size.size()
-        let block = nameSize.height + 2 + sizeSize.height
-        let top = box.rect.midY + block / 2
+        let lines = [name, points, fraction]
+        let heights = lines.map { $0.size().height }
+        let block = heights.reduce(0, +) + 4
+        let widest = lines.map { $0.size().width }.max() ?? 0
 
         // A zone can be cut down to 40 points, at which point its own label is
         // taller than it is. Drawing it anyway would put text across the
         // neighbours, so a piece too small to say what it is says nothing —
         // and the bar still names the layout.
-        guard box.rect.height > block + 8, box.rect.width > max(nameSize.width, sizeSize.width) + 8
-        else { return }
+        guard box.rect.height > block + 8, box.rect.width > widest + 8 else { return }
 
-        name.draw(at: CGPoint(x: box.rect.midX - nameSize.width / 2, y: top - nameSize.height))
-        size.draw(at: CGPoint(x: box.rect.midX - sizeSize.width / 2, y: top - block))
+        var y = box.rect.midY + block / 2
+        for (line, height) in zip(lines, heights) {
+            y -= height
+            line.draw(at: CGPoint(x: box.rect.midX - line.size().width / 2, y: y))
+        }
+    }
+
+    /// §5's second line: the fraction under the pixels, **accent when it is a
+    /// number worth writing down and grey when it is not**.
+    ///
+    /// This is the file's thesis made visible inside the GUI. The editor is not
+    /// hiding the numbers from you; it is showing you which ones you are about
+    /// to write, and the colour is the whole of the message — at a glance, is
+    /// this layout tidy. Each half is coloured on its own, because `1/4 × 0.37`
+    /// is a real state and it should say which half is the untidy one.
+    private static func fractionLabel(_ box: Box) -> NSAttributedString {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        let grey = NSColor.white.withAlphaComponent(0.45)
+        let clean = NSColor.controlAccentColor
+
+        let label = NSMutableAttributedString()
+        for (index, value) in [box.width, box.height].enumerated() {
+            if index == 1 {
+                label.append(NSAttributedString(string: " × ",
+                                                attributes: [.font: font, .foregroundColor: grey]))
+            }
+            label.append(NSAttributedString(
+                string: Fraction.describe(value),
+                attributes: [.font: font,
+                             .foregroundColor: Fraction.clean(value) == nil ? grey : clean]))
+        }
+        return label
+    }
+
+    /// The ✕. One of §5's three ways to delete, and the discoverable one.
+    ///
+    /// FancyZones' most-upvoted issue is titled "how to remove a zone", and the
+    /// cause was that deletion existed only on the keyboard and acted on the
+    /// divider rather than on the zone. A visible control on the thing itself is
+    /// the direct answer; ⌫ over a zone is the fast one for people who have
+    /// found it; and the bar names both.
+    private func draw(remove box: CGRect, active: Bool) {
+        let circle = NSBezierPath(ovalIn: box)
+        NSColor.black.withAlphaComponent(active ? 0.75 : 0.45).setFill()
+        circle.fill()
+        NSColor.white.withAlphaComponent(active ? 0.95 : 0.5).setStroke()
+        circle.lineWidth = 1
+        circle.stroke()
+
+        let arm: CGFloat = 5
+        let cross = NSBezierPath()
+        cross.move(to: CGPoint(x: box.midX - arm, y: box.midY - arm))
+        cross.line(to: CGPoint(x: box.midX + arm, y: box.midY + arm))
+        cross.move(to: CGPoint(x: box.midX - arm, y: box.midY + arm))
+        cross.line(to: CGPoint(x: box.midX + arm, y: box.midY - arm))
+        cross.lineWidth = 1.5
+        cross.lineCapStyle = .round
+        NSColor.white.withAlphaComponent(active ? 0.95 : 0.6).setStroke()
+        cross.stroke()
     }
 }
 
