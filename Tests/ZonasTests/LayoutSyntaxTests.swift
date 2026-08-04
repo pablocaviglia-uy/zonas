@@ -35,11 +35,15 @@ struct LayoutSyntaxTests {
 
     /// **The merge condition.**
     ///
-    /// Not a nice-to-have and not implied by the test above: the writer was
-    /// broken on purpose once, with trailing-comment handling for arrays
-    /// removed, and idempotency still passed byte for byte while two of the
-    /// user's comments were gone. `docs/prototypes/cstbug.swift` is that broken
-    /// writer, kept so the claim can be re-run rather than believed.
+    /// Not a nice-to-have and not implied by the test above. To re-run the
+    /// claim rather than believe it: delete the line in `LayoutSyntax.write`
+    /// that emits `element.comments.trailing`, and watch idempotency pass byte
+    /// for byte while this fails with
+    /// `["// the work one", "// keep it last"]`.
+    ///
+    /// That is also why the fixture carries a comment in every position the
+    /// format allows. The first version of it had none on an array element, so
+    /// this test passed against a writer that had been broken on purpose.
     @Test("Not one comment is lost")
     func noCommentIsLost() throws {
         let document = try LayoutSyntax.parse(try exampleFile())

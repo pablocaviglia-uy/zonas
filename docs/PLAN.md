@@ -53,10 +53,21 @@ universal binary with `-u`.
 
 ### The release pipeline, corrected
 
-The previous version of this section said `release.sh` had never been run. It
-has, end to end, and it worked: **the notarized and verified 0.1.0 `.dmg` is
-sitting in `dist/`.** It is **not published** — there is no tag and no GitHub
-release. That, plus the Homebrew cask and the first-launch window, is Stage 2.
+**Published 2026-08-04: [v0.1.0](https://github.com/pablocaviglia-uy/zonas/releases/tag/v0.1.0).**
+Universal, signed, notarized, stapled. Verified the way it has to be verified —
+downloaded from GitHub, quarantine attribute set as a browser would set it,
+`spctl` answering `accepted / source=Notarized Developer ID`, and then installed
+and opened with the network off, which is the only thing that actually proves
+the stapling.
+
+Note for the next release: the `.dmg` that was sitting in `dist/` was **21
+commits stale** (build 2 against a HEAD of 24). `release.sh` rebuilds from the
+working tree, so run it *at the tag* and check `CFBundleVersion` against
+`git rev-list --count HEAD` before publishing anything.
+
+Still open in Stage 2, and it is the one that matters: **the first-launch
+window**. The release notes warn in bold that nothing visible happens on first
+launch except a small grey icon, but a release note is not a window.
 
 Everything that was listed here as uncommitted is committed (`40c3e11`).
 
@@ -358,19 +369,22 @@ serializes the typed model, any key that version of the app does not know about
 vanishes silently. The tree keeps it. This also makes migrations fifteen lines
 over a loose tree instead of historical structs living forever.
 
-A working prototype exists — 334 lines, tokenizer + tree + writer + an edit demo
-— at `docs/prototypes/final.swift`, with the file it was measured against next
-to it as `example.json5` and `example.canonical.json5`. (It was written to a
-temporary directory and copied into the repo in `40c3e11`; this paragraph used
-to point at the temporary path.) Measured against that hand-written example
-file, with its ASCII diagrams and ratios:
+**Shipped 2026-08-04** as `LayoutSyntax` and `LayoutParser`, with the schema
+layer next to it in `LayoutSchema`. The prototype this was measured on lived in
+`docs/prototypes/` and is deleted; the measurements it produced are now tests,
+which is strictly better because they run on every push instead of once. The
+hand-written example it was measured against is
+`Tests/ZonasTests/Fixtures/example.json5`, and it has since grown a comment in
+every position the format allows — see below for why that mattered.
+
+The prototype's five checks are now `LayoutSyntaxTests`:
 
 ```
-1. Foundation JSON5 accepts the output ....... OK
-2. Idempotent: render(parse(render(x))) ...... STABLE byte for byte
-3. Comments 43 in / 43 out ................... 0 lost
-4. After the editor reorders/renames/moves ... 43/43 survived
-5. The edited output parses .................. OK
+1. Foundation JSON5 accepts the output ....... theOutputIsStillJSON5
+2. Idempotent: render(parse(render(x))) ...... renderingIsIdempotent
+3. Comments in / comments out ................ noCommentIsLost
+4. Unknown keys survive a round trip ......... unknownKeysSurvive
+5. Errors name the line .................. LayoutSyntaxErrorTests
 ```
 
 ### The test that is a merge condition
@@ -387,6 +401,21 @@ removed — to see which test caught it:
 is five lines: harvest the comments from the original, harvest them from the
 render, the difference must be empty. Without it in CI, the canonical-writer
 design is not recommended at all.
+
+> **Two things learned re-running this against the real implementation, and
+> both are the same lesson.**
+>
+> **A test that exists is not a test that bites.** With the writer broken
+> exactly as above, the conservation test *passed* — because the example file
+> had no comment sitting on an array element, so there was nothing in that
+> position to lose. The fixture now carries a comment in every position the
+> format allows, and with that, breaking the writer reproduces the table above
+> against `LayoutSyntaxTests`, verbatim, down to the two comment texts.
+>
+> **Comparing sets is not conservation.** Harvesting into a `Set`, which is the
+> obvious implementation, calls it survived when one of two identical comments
+> is dropped — and the same comment appearing twice in a real config file is
+> ordinary. `LayoutSyntax.lost(from:to:)` counts repeats.
 
 ### What it does not preserve, said before someone discovers it
 
@@ -563,16 +592,28 @@ calendar week. **Every stage ships on its own.**
 | Piece | Days | |
 |---|---|---|
 | Model cleanup (all of §3) | 1 | **done** |
-| `LayoutSyntax`: tokenizer + tree + canonical writer, **with tests 1–6** | 3 | |
-| `LayoutFile` + `LayoutWatcher` (two sources, retry, symlinks) + `LayoutStore` `@MainActor` | 1.5 | `LayoutFile` started |
+| `LayoutSyntax`: tokenizer + tree + canonical writer, **with tests 1–6** | 3 | **done** |
+| `LayoutFile` + `LayoutWatcher` (two sources, retry, symlinks) + `LayoutStore` `@MainActor` | 1.5 | **done**, except `@MainActor` |
 | Migration `layout.json` v0 → `zonas.json5` v1 with backup; XDG paths with an ambiguity error | 1 | |
 | `gap`/`margin`/`modifier` actually honoured (fixes the lying preview) | 0.5 | preview fixed; the values are still hardcoded |
 | Icon in alerts + `zonas check` / `fmt` / `monitors` | 0.5 | |
-| README split into user and contributor + demo GIF | 0.5 | |
+| README split into user and contributor + demo GIF | 0.5 | reframed to lead with the file; split and GIF pending |
 
-**Next up is `LayoutSyntax`**, and it is next for the reason in §10 rule 1: the
-migration, the watcher and the `defaults` keys all need a parser that already
-knows how to give the file back unharmed.
+**Next up is the migration**: `layout.json` v0 → `zonas.json5` v1, with a backup
+and XDG paths. It is next because the file currently carries JSON5 under a
+`.json` name, which §4 rightly calls a lie, and because everything after it —
+`defaults`, multiple layouts, per-monitor rules — needs a `version` key to hang
+off. `LayoutSyntax` exists now, so the migration is a transform over a loose
+tree rather than a second set of structs.
+
+`LayoutStore` is **not** `@MainActor`. The watcher hops to the main queue before
+touching it, which is the guarantee in practice; the compiler-enforced version
+belongs with a Swift 6 language mode migration, which is a piece of its own and
+is not on this list yet.
+
+The demo GIF is worth its own line, because the thing to film only started
+working today: editing the file in vim and watching the zones move. That is the
+pitch in five seconds, and until the watcher landed there was nothing to record.
 
 **Ships:** you edit `~/.config/zonas/zonas.json5` in vim, save, and the zones
 change — with comments, with `1/3` ratios, with errors that name the line, with

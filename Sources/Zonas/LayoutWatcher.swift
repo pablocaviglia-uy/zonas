@@ -14,8 +14,8 @@ import Foundation
 /// `LayoutFile.write` all end with a rename over the target — after which the
 /// descriptor being watched refers to a file that no longer has a name.
 ///
-/// Measured, with a spike that performs the four ways a config file gets
-/// written (`docs/prototypes/watch.swift`):
+/// Measured, by performing the four ways a config file gets written — which is
+/// what `LayoutWatcherTests` does, one test each:
 ///
 /// ```
 /// 1. in-place write ....... file source fires, directory silent
