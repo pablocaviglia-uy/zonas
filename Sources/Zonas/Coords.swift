@@ -38,6 +38,29 @@ enum Coords {
 
     static func cocoaToCG(_ rect: CGRect) -> CGRect { flip(rect) }
     static func cgToCocoa(_ rect: CGRect) -> CGRect { flip(rect) }
+
+    /// A CG rectangle in the coordinates of a view that covers exactly `area`.
+    ///
+    /// This is the conversion every window that draws zones needs — the drag
+    /// overlay and the editor both cover one screen's usable area and both have
+    /// to put a zone where the zone is. It is one expression, and it is the one
+    /// expression in the app that is wrong in a way you cannot see: on a single
+    /// screen a mirrored Y and a correct Y agree for anything centred, and the
+    /// difference only appears on a second monitor of a different height.
+    ///
+    /// It does not go through `cgToCocoa`, and that is the point. Flipping
+    /// against the desktop's ceiling and then subtracting the window's origin
+    /// cancels `primaryMaxY` out of the answer — the two uses of it are the same
+    /// number with opposite signs. Written this way there is no global in the
+    /// arithmetic at all, so it is a pure function of its two arguments and a
+    /// test can state what it should return instead of asking the machine it is
+    /// running on.
+    static func cgToView(_ rect: CGRect, filling area: CGRect) -> CGRect {
+        CGRect(x: rect.minX - area.minX,
+               y: area.maxY - rect.maxY,
+               width: rect.width,
+               height: rect.height)
+    }
 }
 
 extension NSScreen {

@@ -65,11 +65,9 @@ final class OverlayController {
         // What gets drawn is `frame`, not `rect`: the frame is the rectangle the
         // window is going to be given, and the preview showing anything else is
         // the preview lying.
-        let windowFrame = window.frame
         view.zones = layout.zones.enumerated().map { index, zone in
-            let rectCocoa = Coords.cgToCocoa(layout.frame(of: zone, in: area))
-            return ZoneOverlayView.Box(
-                rect: rectCocoa.offsetBy(dx: -windowFrame.origin.x, dy: -windowFrame.origin.y),
+            ZoneOverlayView.Box(
+                rect: Coords.cgToView(layout.frame(of: zone, in: area), filling: area),
                 name: zone.name,
                 // By index. Two zones with the same geometry are a thing people
                 // write in a config file, and comparing rectangles would light
