@@ -12,10 +12,10 @@ import Foundation
 /// need a test — a broken file, a file that disappears, two writers — were
 /// exactly the ones only testable by hand, one at a time, against your own
 /// config.
-final class ZoneStore {
+final class LayoutStore {
 
     /// The instance the app uses. Everything else takes a URL.
-    static let shared = ZoneStore(url: LayoutFile.defaultURL)
+    static let shared = LayoutStore(url: LayoutFile.defaultURL)
 
     private let url: URL
     private(set) var layout: Layout
@@ -72,9 +72,22 @@ final class ZoneStore {
     /// have an `invalid` state later: something coherent is still on screen
     /// while the file is broken.
     @discardableResult
-    func reload() -> Bool {
-        guard let fresh = LayoutFile.read(url) else { return false }
+    func reload() -> Reload {
+        guard let fresh = LayoutFile.read(url) else { return .failed }
+        guard fresh != layout else { return .unchanged }
         layout = fresh
-        return true
+        return .changed
+    }
+
+    /// What a reload turned out to be.
+    ///
+    /// `unchanged` is not pedantry. A file watcher fires for a save that only
+    /// moved whitespace, for a save that changed a comment, and for a `touch` —
+    /// and a log that says "reloaded" every time is a log nobody reads. This is
+    /// what `Layout` being `Equatable` was for.
+    enum Reload {
+        case changed
+        case unchanged
+        case failed
     }
 }

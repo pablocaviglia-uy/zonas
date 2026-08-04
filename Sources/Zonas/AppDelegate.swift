@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var statusItem: NSStatusItem?
     private var launchAtLoginItem: NSMenuItem?
     private var permissionWatchdog: Timer?
+    private var layoutWatcher: LayoutWatcher?
     private let monitor = DragMonitor()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -16,14 +17,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // Writes the JSON out so it can be edited without having to invent the
         // format, but ONLY if it isn't there yet: overwriting it on every launch
         // wiped the user's zones every time the file had a typo.
-        ZoneStore.shared.createIfMissing()
+        LayoutStore.shared.createIfMissing()
 
         buildMenu()
         startMonitor()
+        startWatchingTheLayout()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         monitor.stop()
+        layoutWatcher?.stop()
+    }
+
+    /// Edit the file, save, and the zones change. Without this the file is an
+    /// import format with a menu item next to it.
+    ///
+    /// "Reload Zones" stays in the menu regardless: it costs nothing, and it is
+    /// the thing to reach for when you want to know whether the file is being
+    /// read at all.
+    private func startWatchingTheLayout() {
+        let watcher = LayoutWatcher(url: LayoutStore.shared.fileURL) {
+            switch LayoutStore.shared.reload() {
+            case .changed:
+                Log.write("layout: reloaded, now \"\(LayoutStore.shared.layout.name)\" "
+                          + "with \(LayoutStore.shared.layout.zones.count) zones")
+            case .unchanged, .failed:
+                // A save that changed nothing is not worth a line, and a save
+                // that broke the file already logged why, with the line number.
+                break
+            }
+        }
+        watcher.start()
+        layoutWatcher = watcher
+        Log.write("watch: following \(LayoutStore.shared.fileURL.path)")
     }
 
     // MARK: - Permissions
@@ -148,11 +174,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     @objc private func openLayout() {
-        NSWorkspace.shared.open(ZoneStore.shared.fileURL)
+        NSWorkspace.shared.open(LayoutStore.shared.fileURL)
     }
 
     @objc private func reloadLayout() {
-        ZoneStore.shared.reload()
+        LayoutStore.shared.reload()
     }
 
     @objc private func openLog() {

@@ -150,7 +150,7 @@ final class DragMonitor {
             isDragging = true
             // The layout is taken here, once, and everything from here to the
             // drop reads this copy.
-            snapshot = ZoneStore.shared.layout
+            snapshot = LayoutStore.shared.layout
             // The window is looked up under the starting point, not the current
             // one: by the time the threshold is crossed the cursor may already
             // be over a different one.

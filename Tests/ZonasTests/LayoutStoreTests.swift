@@ -3,7 +3,7 @@ import Testing
 @testable import Zonas
 
 @Suite("Keeping the layout in memory")
-struct ZoneStoreTests {
+struct LayoutStoreTests {
 
     private let twoZones = """
     {
@@ -18,7 +18,7 @@ struct ZoneStoreTests {
     @Test("With no file at all, the built-in layout is what you get")
     func startsFromTheBuiltInLayout() throws {
         try inTemporaryDirectory { dir in
-            let store = ZoneStore(url: dir.appendingPathComponent("zonas.json"))
+            let store = LayoutStore(url: dir.appendingPathComponent("zonas.json"))
 
             #expect(store.layout == .threeColumns)
         }
@@ -30,7 +30,7 @@ struct ZoneStoreTests {
             let url = dir.appendingPathComponent("zonas.json")
             try Data(twoZones.utf8).write(to: url)
 
-            let store = ZoneStore(url: url)
+            let store = LayoutStore(url: url)
 
             #expect(store.layout.name == "Two")
             #expect(store.layout.zones.count == 2)
@@ -44,13 +44,13 @@ struct ZoneStoreTests {
         try inTemporaryDirectory { dir in
             let url = dir.appendingPathComponent("zonas.json")
             try Data(twoZones.utf8).write(to: url)
-            let store = ZoneStore(url: url)
+            let store = LayoutStore(url: url)
             let before = store.layout
 
             try Data("{ \"name\": \"Two\", \"zones\": [ ,, ] }".utf8).write(to: url)
             let reloaded = store.reload()
 
-            #expect(reloaded == false)
+            #expect(reloaded == .failed)
             #expect(store.layout == before, "a typo took the working zones with it")
         }
     }
@@ -60,12 +60,12 @@ struct ZoneStoreTests {
         try inTemporaryDirectory { dir in
             let url = dir.appendingPathComponent("zonas.json")
             try Data(twoZones.utf8).write(to: url)
-            let store = ZoneStore(url: url)
+            let store = LayoutStore(url: url)
 
             try Data(#"{ "name": "One", "zones": [ { "name": "All", "x": 0, "y": 0, "width": 1, "height": 1 } ] }"#.utf8)
                 .write(to: url)
 
-            #expect(store.reload() == true)
+            #expect(store.reload() == .changed)
             #expect(store.layout.name == "One")
         }
     }
@@ -75,12 +75,12 @@ struct ZoneStoreTests {
         try inTemporaryDirectory { dir in
             let url = dir.appendingPathComponent("zonas").appendingPathComponent("zonas.json")
 
-            ZoneStore(url: url).createIfMissing()
+            LayoutStore(url: url).createIfMissing()
             #expect(FileManager.default.fileExists(atPath: url.path))
 
             // Whatever is in there now belongs to the user, typos included.
             try Data("edited by hand, and broken".utf8).write(to: url)
-            ZoneStore(url: url).createIfMissing()
+            LayoutStore(url: url).createIfMissing()
 
             #expect(try String(contentsOf: url, encoding: .utf8) == "edited by hand, and broken")
         }
