@@ -30,32 +30,34 @@ final class ZoneStore {
     /// Path of the file, so it can be opened from the menu.
     var fileURL: URL { url }
 
-    /// Writes the built-in layout only if there is no file yet.
+    /// Writes the starting file, only if there is no file yet.
     ///
     /// This is what gets called at startup. It used to be a bare `save()`, and
     /// that clobbered the user's file every time parsing failed: a typo took
     /// all of their zones with it. With launch at login that would happen on
     /// the next login, when nobody is watching any more.
+    ///
+    /// What it writes is `LayoutFile.seed` — the file as a human would write
+    /// it — and not the encoded layout. The error is only logged because there
+    /// is no window to put it in yet; the first-launch window is Stage 2.
     func createIfMissing() {
         guard !FileManager.default.fileExists(atPath: url.path) else { return }
         do {
-            try save()
+            try LayoutFile.write(Data(LayoutFile.seed.utf8), to: url)
+            Log.write("layout: wrote the starting file at \(url.path)")
         } catch {
             Log.write("layout: FAILED to create \(url.path) — \(error)")
         }
     }
 
-    /// Writes the current layout, creating the folder if needed.
-    ///
-    /// It throws rather than returning a `Bool` because the only caller used to
-    /// discard that `Bool`: a read-only config folder, a full disk or a wrong
-    /// permission all ended the same way, with the app carrying on in silence.
-    /// An error that reaches the log at least names itself.
-    func save() throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try LayoutFile.write(encoder.encode(layout), to: url)
-    }
+    // There is deliberately no `save()`.
+    //
+    // The one that was here encoded the `Codable` structs, which is a writer
+    // that cannot help destroying every comment in the file the first time
+    // anything calls it — and nothing did. A layout writer arrives with
+    // `LayoutSyntax`, which renders from a tree that remembers the comments and
+    // the keys this version does not know about. Until then, the honest amount
+    // of code for writing a layout is none.
 
     /// Re-reads the file. If it cannot be read, **what is in memory stays**.
     ///

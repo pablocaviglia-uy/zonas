@@ -34,15 +34,11 @@ struct ZoneDecodingTests {
         #expect(layout.zones == [Zone(name: "Left", x: 0, y: 0, width: 0.25, height: 1)])
     }
 
-    /// The other half of the same story: what goes out no longer carries one.
-    @Test("Saving does not put an id back into the file")
-    func doesNotWriteIDs() throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-
-        let text = String(decoding: try encoder.encode(Layout.threeColumns), as: UTF8.self)
-
-        #expect(!text.contains("\"id\""))
+    /// The other half of the same story: what gets written no longer carries one.
+    @Test("The starting file has no id key in it")
+    func doesNotWriteIDs() {
+        #expect(!LayoutFile.seed.contains("id:"))
+        #expect(!LayoutFile.seed.contains("\"id\""))
     }
 
     /// The property the file watcher will lean on to ignore a save that only

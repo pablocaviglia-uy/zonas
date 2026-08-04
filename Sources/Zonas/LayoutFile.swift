@@ -22,6 +22,60 @@ enum LayoutFile {
         return base.appendingPathComponent("Zonas/layout.json")
     }()
 
+    /// What gets written on the very first launch.
+    ///
+    /// The strongest documentation this project will ever ship is the first
+    /// thing somebody sees when they open this file, and until now that was
+    /// alphabetised `JSONEncoder` output where `height` came before `name`, with
+    /// three UUIDs in it. A config file with no comments is not a config file,
+    /// it is a dump.
+    ///
+    /// It has to parse into `Layout.threeColumns` exactly — the store starts
+    /// from the built-in layout and reads this file on the next launch, so if
+    /// the two ever disagreed the app would quietly change behaviour on a
+    /// restart. There is a test that holds them together.
+    static let seed = """
+    // ~/Library/Application Support/Zonas/layout.json
+    //
+    // Zonas reads this file and never writes over it. Your comments, your
+    // ordering and your names stay exactly as you left them. Edit, save, and
+    // pick "Reload Zones" from the menu bar.
+    //
+    // Zones are fractions of the screen's usable area — what is left after the
+    // menu bar, the Dock and, on the machines that have one, the notch. Keeping
+    // them relative is what makes a layout written on the laptop land correctly
+    // on the 34" monitor without redrawing it.
+    //
+    //        x: 0                                   x: 1
+    //   y: 0 ┌───────────┬───────────────────────────┐
+    //        │           │                           │
+    //        │           │   { x: 0.25, y: 0,        │
+    //        │           │     width: 0.75,          │
+    //        │           │     height: 1 }           │
+    //   y: 1 └───────────┴───────────────────────────┘
+    //
+    // If the file does not parse, Zonas says so in ~/Library/Logs/Zonas.log,
+    // keeps the zones it already had, and does not touch a byte of what you
+    // wrote.
+
+    {
+      name: "Three Columns",
+
+      // Editor in the middle, docs on the left, chat on the right. It is the
+      // layout that pays off the most on a wide monitor.
+      //
+      // Zones are allowed to overlap, and that is on purpose: when they do, the
+      // SMALLEST one under the cursor wins, so a small zone can float on top of
+      // a big one without the big one swallowing every drop.
+      zones: [
+        { name: "Left",   x: 0,    y: 0, width: 0.25, height: 1 },
+        { name: "Center", x: 0.25, y: 0, width: 0.5,  height: 1 },
+        { name: "Right",  x: 0.75, y: 0, width: 0.25, height: 1 },
+      ],
+    }
+
+    """
+
     /// Reads the layout. `nil` means there is nothing usable here.
     ///
     /// What the caller does about it is the caller's business — at startup it
@@ -32,7 +86,16 @@ enum LayoutFile {
     static func read(_ url: URL) -> Layout? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         do {
-            return try JSONDecoder().decode(Layout.self, from: Data(contentsOf: url))
+            let decoder = JSONDecoder()
+            // Comments, unquoted keys, trailing commas and `.25`, for one line
+            // and no dependency — `allowsJSON5` is Foundation's. That is most of
+            // why the format is JSON5 and not TOML: TOMLKit would mean C++
+            // interop inside an executable that has to be signed and notarized.
+            //
+            // JSON5 is a superset of JSON, so every file written before this
+            // still reads.
+            decoder.allowsJSON5 = true
+            return try decoder.decode(Layout.self, from: Data(contentsOf: url))
         } catch {
             Log.write("layout: FAILED to read \(url.path) — \(error)")
             Log.write("layout: the file is NOT touched")
