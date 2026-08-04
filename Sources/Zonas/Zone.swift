@@ -34,7 +34,14 @@ struct Zone: Codable, Equatable {
 }
 
 /// A set of zones that are used together.
-struct Layout: Codable {
+///
+/// `Equatable` is not decoration. It is what lets the file watcher ignore a
+/// save that changed nothing but the formatting, what lets undo coalesce a run
+/// of drags into one step, and what answers "did this actually change?" without
+/// comparing rendered text. `Zone` already was; the pair only became meaningful
+/// once `id` left the schema, because until then two reads of the very same
+/// file compared different.
+struct Layout: Codable, Equatable {
     var name: String
     var zones: [Zone]
 

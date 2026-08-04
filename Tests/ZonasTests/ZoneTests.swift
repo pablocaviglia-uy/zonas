@@ -44,4 +44,20 @@ struct ZoneDecodingTests {
 
         #expect(!text.contains("\"id\""))
     }
+
+    /// The property the file watcher will lean on to ignore a save that only
+    /// moved the whitespace around. It was false while `id` was in the schema:
+    /// a fresh UUID per read made every read different from the last.
+    @Test("Two reads of the same bytes compare equal")
+    func readingIsStable() throws {
+        let json = Data("""
+        { "name": "Three Columns",
+          "zones": [ { "name": "Left", "x": 0, "y": 0, "width": 0.25, "height": 1 } ] }
+        """.utf8)
+
+        let first = try JSONDecoder().decode(Layout.self, from: json)
+        let second = try JSONDecoder().decode(Layout.self, from: json)
+
+        #expect(first == second)
+    }
 }
