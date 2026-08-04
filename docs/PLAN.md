@@ -587,7 +587,7 @@ feature is unusable. Config-first does not mean guess.
 A "day" is a real, focused working day. With a job in the way, roughly half a
 calendar week. **Every stage ships on its own.**
 
-### Stage 1 — "The file is really the truth" · 8 days · start here
+### Stage 1 — "The file is really the truth" · 8 days · **complete except the GIF**
 
 | Piece | Days | |
 |---|---|---|
@@ -597,7 +597,7 @@ calendar week. **Every stage ships on its own.**
 | Migration `layout.json` v0 → `zonas.json5` v1 with backup; XDG paths with an ambiguity error | 1 | **done** |
 | `gap`/`margin`/`modifier` actually honoured (fixes the lying preview) | 0.5 | **done** |
 | Icon in alerts + `zonas check` / `fmt` / `monitors` | 0.5 | **done** |
-| README split into user and contributor + demo GIF | 0.5 | reframed to lead with the file; split and GIF pending |
+| README split into user and contributor + demo GIF | 0.5 | split **done**; GIF pending |
 
 **`$XDG_CONFIG_HOME` was implemented and then removed**, which is the only
 reason the problem was found. A GUI app on macOS is launched by Finder or
