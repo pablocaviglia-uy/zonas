@@ -723,14 +723,28 @@ excuse and it is much better to know that before building on it.
 
 ### Unresolved
 
-macOS 26 showed a *"Support Ending for Intel-based Apps"* notification while
-universal binaries were being tested. It is not confirmed which binary triggered
-it, or whether a universal binary triggers it at all as opposed to an
-x86_64-only one. **If shipping universal makes every user see that notification
-on first launch, arm64-only is the better trade** — worse than not supporting
-Intel is telling every Apple Silicon user that your app is about to stop
-working. `build.sh` supports both; the decision is still open and should be
-settled before the first public release.
+~~macOS 26 showed a *"Support Ending for Intel-based Apps"* notification while
+universal binaries were being tested.~~
+
+**Settled 2026-08-04, by measurement: ship universal.** A universal build was
+installed and launched on this Apple Silicon machine, and `vmmap` on the live
+process says:
+
+```
+Path:         /Applications/Zonas.app/Contents/MacOS/Zonas
+Version:      0.1.0 (23)
+Code Type:    ARM64
+```
+
+It runs the arm64 slice natively. It is not an Intel-based app by any definition
+the notification could be using, so shipping universal cannot be what shows that
+warning to an Apple Silicon user. The notification seen during the release
+research almost certainly came from launching one of the x86_64-only
+intermediate builds that `release.sh` produces on the way to the `lipo`.
+
+The reasoning that made this worth checking still stands and is worth keeping:
+worse than not supporting Intel would have been telling every Apple Silicon user
+that your app is about to stop working.
 
 ---
 
