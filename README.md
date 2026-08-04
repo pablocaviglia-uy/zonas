@@ -1,24 +1,62 @@
 # Zonas
 
-Zonas is a macOS menu bar utility that snaps windows into zones you define
-yourself: hold **⇧ Shift** while dragging a window, the zones light up, drop it
-and the window fills the one under the cursor. It is for people who liked
+**Your window layout is a file.** Not a preference pane, not a database in
+`~/Library` — a file you write, with comments in it, that goes in your dotfiles
+repo and gets symlinked wherever you want it.
+
+Hold **⇧ Shift** while dragging a window, the zones light up, drop it and the
+window fills the one under the cursor. Edit the file, save, and the zones change
+underneath you. (*zonas* is Spanish for *zones*.)
+
+```js
+// ~/Library/Application Support/Zonas/layout.json
+//
+//        x: 0                                   x: 1
+//   y: 0 ┌───────────┬───────────────────────────┐
+//        │           │   the wide one for what   │
+//        │   docs    │   you are working on      │
+//   y: 1 └───────────┴───────────────────────────┘
+
+{
+  name: "Three Columns",
+  zones: [
+    { name: "Left",   x: 0,    y: 0, width: 0.25, height: 1 },
+    { name: "Center", x: 0.25, y: 0, width: 0.5,  height: 1 },
+    { name: "Right",  x: 0.75, y: 0, width: 0.25, height: 1 },
+  ],
+}
+```
+
+Ratios work too — `"1/3"` rather than `0.3333`, because three columns written as
+`0.3333` leave a sliver on the right edge that is invisible in the file and
+maddening on screen. If the file does not parse, the app says which line, keeps
+the zones it was already using, and does not touch a byte of what you wrote.
+
+It is for people who liked
 [FancyZones](https://learn.microsoft.com/en-us/windows/powertoys/fancyzones)
-from PowerToys on Windows and want the same gesture on a Mac. (*zonas* is
-Spanish for *zones*.)
+from PowerToys on Windows, and for people who would rather write their window
+layout once and take it to every machine they own.
 
 <!--
   DEMO GIF GOES HERE.
-  Record a window being dragged with Shift held down: the zones appearing,
-  the one under the cursor highlighting, the window snapping on release.
+  Two halves, and the second one is the pitch: a window being dragged with
+  Shift held — zones appearing, the one under the cursor highlighting, the
+  window snapping on release — and then the file being edited in vim,
+  saved, and the zones changing without touching the app.
   Then replace this comment with:
   ![Zonas snapping a window into a zone](docs/demo.gif)
 -->
 
-**Status: prototype.** The whole path works end to end — detecting the drag,
-previewing the zones, moving the window — but zones are still edited by hand in
-a text file. There is no visual editor yet, and that is the main thing standing
-between this and something you would recommend to someone else.
+**There is no visual editor, and that is on purpose for now.** Everything you
+can express you express in the file, which means every layout you build is
+something you can read, diff, comment, and carry to another machine. An editor
+will come to widen the audience, not to make this usable: AeroSpace has 22,000
+stars and no configuration GUI at all.
+
+**Status: early.** The snapping works end to end and the file is the real
+source of truth — comments, ratios, live reload, errors that name the line. What
+is not there yet is multiple layouts, per-monitor rules, and the visual editor.
+See [Not there yet](#not-there-yet).
 
 ## Install
 
@@ -418,11 +456,22 @@ laziness, it is that every signature invalidates the previous ticket.
 
 ## Not there yet
 
-- [ ] Visual zone editor
-- [ ] Multiple layouts and a way to switch between them
-- [ ] Respecting the minimum window size each app enforces
-- [ ] Testing against Electron, Java and other apps that do not cooperate with the Accessibility API
-- [ ] Preferences: choosing the modifier key, gaps between zones
+Roughly in the order they are being built. The reasoning behind the order — and
+behind most of the decisions in here — is written down in
+[`docs/PLAN.md`](docs/PLAN.md).
+
+- [ ] **Multiple layouts, and per-monitor rules.** Which layout goes on which
+      screen, described by name, by glob, by minimum width — including monitors
+      you do not have plugged in right now. A GUI can only offer a dropdown of
+      what is attached today; a file can describe the office dock, the home
+      dock, and the laptop on its own.
+- [ ] Respecting the minimum window size each app enforces. Right now Zonas asks
+      for the zone, the app quietly gives back something else, and the log says
+      so.
+- [ ] Electron, Java and other apps that do not cooperate with the
+      Accessibility API
+- [ ] `gap`, `margin` and the modifier key, set from the file
+- [ ] A visual editor — one that writes *this* file, comments and all
 - [ ] A Homebrew cask, so `brew install --cask zonas` works
 - [ ] Automatic updates. Today a new version means downloading the `.dmg` again
 
