@@ -7,8 +7,17 @@ import Foundation
 /// Keeping them relative is what lets the same layout work just as well on the
 /// laptop screen and on an external monitor of a different resolution, without
 /// having to redraw it for each one.
-struct Zone: Codable, Identifiable, Equatable {
-    var id: UUID = UUID()
+///
+/// **There is deliberately no `id`.** There was one, and Swift synthesized
+/// `encode(to:)` over it, so every save put UUIDs nobody had typed into a file
+/// whose whole point is being edited by hand. They were not even useful as
+/// identity: a fresh one was minted on every reload of a file that didn't carry
+/// them, so nothing could be tracked across a reload anyway.
+///
+/// In the file the handle is `name`, unique within its layout. The stable
+/// identity the editor needs is a different thing, it lives in memory, and it
+/// never reaches disk.
+struct Zone: Codable, Equatable {
     var name: String
     var x: Double
     var y: Double
@@ -21,36 +30,6 @@ struct Zone: Codable, Identifiable, Equatable {
                y: area.origin.y + area.height * y,
                width: area.width * width,
                height: area.height * height)
-    }
-}
-
-extension Zone {
-
-    private enum CodingKeys: String, CodingKey {
-        case id, name, x, y, width, height
-    }
-
-    /// Custom decoder so that `id` can be left out of the file.
-    ///
-    /// Swift does **not** apply a property's default value when decoding: even
-    /// though `id` says `= UUID()`, the synthesized decoder fails with
-    /// `keyNotFound` when the JSON doesn't carry it. And since nobody writing a
-    /// zone by hand is going to make up a UUID, the documented flow —editing
-    /// the file— failed every single time.
-    ///
-    /// The id means nothing outside the process, so one is made up when it is
-    /// missing. This lives in an extension and not in the struct body so as not
-    /// to lose the memberwise initializer.
-    init(from decoder: Decoder) throws {
-        let fields = try decoder.container(keyedBy: CodingKeys.self)
-        self.init(
-            id: try fields.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
-            name: try fields.decode(String.self, forKey: .name),
-            x: try fields.decode(Double.self, forKey: .x),
-            y: try fields.decode(Double.self, forKey: .y),
-            width: try fields.decode(Double.self, forKey: .width),
-            height: try fields.decode(Double.self, forKey: .height)
-        )
     }
 }
 
