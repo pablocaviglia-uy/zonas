@@ -15,8 +15,13 @@ part that stops the next person from cheerfully undoing it.
 
 ## 1. Where things stand
 
-**Repository:** https://github.com/pablocaviglia-uy/zonas — public, MIT, one
-commit (`d5fa8e3`).
+**Repository:** https://github.com/pablocaviglia-uy/zonas — public, MIT.
+
+> **Updated 2026-08-04.** Everything in §3 has landed, one commit per fix, in
+> the order they are written there. Two things in this section were out of date
+> and are corrected below: `release.sh` has been run end to end, and the
+> uncommitted tree is committed. §3 itself now carries a status note, including
+> the two places where what landed is not literally what it asked for.
 
 **What works, end to end:** hold ⇧ while dragging a window, the zones light up,
 drop it and the window fills the one under the cursor. Zones are stored as
@@ -35,30 +40,30 @@ universal binary with `-u`.
 |---|---|
 | `DragMonitor.swift` | The `CGEventTap` that detects the drag. macOS has no API that says "a window is being moved", so this is the awkward part. |
 | `AXWindow.swift` | Reading and moving other apps' windows through the Accessibility API. |
-| `Coords.swift` | Converting between macOS's two screen coordinate systems. The number one source of bugs in this kind of app. |
+| `Coords.swift` | Converting between macOS's two screen coordinate systems. The number one source of bugs in this kind of app. Also `NSScreen.displayID`. |
 | `OverlayController.swift` | The translucent layer that draws the zones. |
-| `Zone.swift` | Model and JSON persistence. |
+| `Zone.swift` | The model: `Zone`, `Layout`, and hit-testing. Nothing about files. |
+| `LayoutFile.swift` | Where the file is, reading it, writing it, and the text of the one the first launch creates. |
+| `ZoneStore.swift` | The layout in memory, and which file it came from. |
 | `LaunchAtLogin.swift` | `SMAppService` registration. |
 | `Signature.swift` | Logs the live process's cdhash and designated requirement. |
 | `Log.swift` | File log at `~/Library/Logs/Zonas.log`. |
 | `AppDelegate.swift` | Menu bar, permissions, wiring. |
+| `Tests/ZonasTests/` | 25 tests. `swift test`, and CI runs it on every push. |
 
-### Uncommitted work sitting in the tree
+### The release pipeline, corrected
 
-Produced by the release-pipeline research and **not yet reviewed by a human**:
+The previous version of this section said `release.sh` had never been run. It
+has, end to end, and it worked: **the notarized and verified 0.1.0 `.dmg` is
+sitting in `dist/`.** It is **not published** — there is no tag and no GitHub
+release. That, plus the Homebrew cask and the first-launch window, is Stage 2.
 
-- `release.sh` — new. Universal build, notarization, stapling, DMG. **Never run.**
-- `Resources/Zonas-debug.entitlements` — new.
-- `build.sh` — modified: universal support, hardened runtime, rpath stripping.
-- `README.md` — modified: install section, first-launch walkthrough.
-- `.gitignore` — modified: `.build-release/`, `dist/`.
+Everything that was listed here as uncommitted is committed (`40c3e11`).
 
-Read these before committing. They were written by agents against a verified
-machine, but nobody has run `release.sh` end to end.
+### The one human step, already taken
 
-### The one blocking human step
-
-Notarization credentials are not stored yet:
+The notarization credentials are stored — this is kept because it is what a
+fresh machine, or an expired app-specific password, will need again:
 
 ```bash
 xcrun notarytool store-credentials zonas --team-id YY7SF272MV
@@ -84,7 +89,8 @@ An empty list means success. An error means the profile is not there.
 copies of Zonas from `dist/` and from scratch directories. Check with
 `pgrep -x Zonas` and confirm the path — only the copy in `/Applications` should
 be running day to day, because `LaunchAtLogin` deliberately refuses to talk to
-Background Task Management from anywhere else.
+Background Task Management from anywhere else. (Checked on 2026-08-04: one
+process, `/Applications/Zonas.app`. Worth re-checking, not worth assuming.)
 
 **Two user-facing warnings were seen during testing, and both are real.**
 macOS 26 showed *"Support Ending for Intel-based Apps"* while universal binaries
@@ -148,6 +154,34 @@ broken and there is nothing to debug.
 Eight items, ordered by what they cost to fix later rather than by size. All
 verified against the current code and against the file the app actually wrote on
 this machine.
+
+> **Done, 2026-08-04.** All of it, one commit per item, in this order, from
+> `1c18c77` to `dd6d701`. The commit messages carry the reasoning; this section
+> is left as written so the two can be read against each other. Three things are
+> worth knowing before reading on:
+>
+> **(e) landed as two functions, not one.** Applying the inset inside
+> `rect(in:)` as written below would have put the gap into the hit region too,
+> leaving an eight-point band at every zone boundary where a drop does nothing
+> and nothing explains why. So `rect(in:)` is the zone's share of the screen and
+> the thing hit-testing asks about — it tiles, edge to edge — and `frame(in:)`
+> is what the window is given. The overlay draws `frame` and the drop sets
+> `frame`, which is what the fix was actually for. There is a test that fails if
+> the gap ever moves into `rect(in:)`.
+>
+> **(i) landed as content only.** The first launch now writes the hand-written
+> example, comments and ASCII diagram and all, and the reader turns on
+> `allowsJSON5` to read it back. The file is still called `layout.json` and
+> still lives in Application Support, so it is currently a `.json` that is not
+> JSON — which §4 rightly calls a lie. Moving and renaming it is the migration
+> piece's job, because that is the piece that has to not lose anybody's file.
+>
+> **`save()` is gone rather than fixed.** It serialized the `Codable` structs,
+> which is a writer that destroys every comment in the file the first time
+> anything calls it — and nothing did. Rule 4 in §10 says the writer renders
+> from the tree; until `LayoutSyntax` exists there is no writer that obeys that,
+> so there is no writer. `LayoutFile.write` (atomic, symlink-safe) is the
+> primitive it will be built on.
 
 ### a) `Zone.id` is written to the file, contradicting the README
 
@@ -255,6 +289,15 @@ story starts there or it does not start.
 No CI, no tests. `Zone.rect(in:)` and `zone(under:in:)` are pure and testable
 today.
 
+> Both landed with the fixes above: 25 tests in `Tests/ZonasTests/`, and
+> `.github/workflows/ci.yml` runs `swift build` and `swift test` on every push.
+> A test target links against the executable target directly, `main.swift` and
+> all, so the app did not have to be cut into a library to get under test.
+>
+> The symlink test was verified the way §4 verifies things — by breaking the
+> writer on purpose and watching it fail — and it fails for both halves of the
+> bug: the link turned into a regular file, and the real file left stale.
+
 ---
 
 ## 4. The format decision
@@ -316,11 +359,11 @@ vanishes silently. The tree keeps it. This also makes migrations fifteen lines
 over a loose tree instead of historical structs living forever.
 
 A working prototype exists — 334 lines, tokenizer + tree + writer + an edit demo
-— at
-`/private/tmp/claude-501/-Users-pablo-devel-projects-fcstudio-projects/49f0eeeb-302f-464b-8a0b-36b2a1a9ac8b/scratchpad/v/final.swift`.
-**That path is temporary and will be cleaned up. Copy it into the repo before
-relying on it.** Measured against a hand-written example file with ASCII
-diagrams and ratios:
+— at `docs/prototypes/final.swift`, with the file it was measured against next
+to it as `example.json5` and `example.canonical.json5`. (It was written to a
+temporary directory and copied into the repo in `40c3e11`; this paragraph used
+to point at the temporary path.) Measured against that hand-written example
+file, with its ASCII diagrams and ratios:
 
 ```
 1. Foundation JSON5 accepts the output ....... OK
@@ -517,15 +560,19 @@ calendar week. **Every stage ships on its own.**
 
 ### Stage 1 — "The file is really the truth" · 8 days · start here
 
-| Piece | Days |
-|---|---|
-| Model cleanup (all of §3) | 1 |
-| `LayoutSyntax`: tokenizer + tree + canonical writer, **with tests 1–6** | 3 |
-| `LayoutFile` + `LayoutWatcher` (two sources, retry, symlinks) + `LayoutStore` `@MainActor` | 1.5 |
-| Migration `layout.json` v0 → `zonas.json5` v1 with backup; XDG paths with an ambiguity error | 1 |
-| `gap`/`margin`/`modifier` actually honoured (fixes the lying preview) | 0.5 |
-| Icon in alerts + `zonas check` / `fmt` / `monitors` | 0.5 |
-| README split into user and contributor + demo GIF | 0.5 |
+| Piece | Days | |
+|---|---|---|
+| Model cleanup (all of §3) | 1 | **done** |
+| `LayoutSyntax`: tokenizer + tree + canonical writer, **with tests 1–6** | 3 | |
+| `LayoutFile` + `LayoutWatcher` (two sources, retry, symlinks) + `LayoutStore` `@MainActor` | 1.5 | `LayoutFile` started |
+| Migration `layout.json` v0 → `zonas.json5` v1 with backup; XDG paths with an ambiguity error | 1 | |
+| `gap`/`margin`/`modifier` actually honoured (fixes the lying preview) | 0.5 | preview fixed; the values are still hardcoded |
+| Icon in alerts + `zonas check` / `fmt` / `monitors` | 0.5 | |
+| README split into user and contributor + demo GIF | 0.5 | |
+
+**Next up is `LayoutSyntax`**, and it is next for the reason in §10 rule 1: the
+migration, the watcher and the `defaults` keys all need a parser that already
+knows how to give the file back unharmed.
 
 **Ships:** you edit `~/.config/zonas/zonas.json5` in vim, save, and the zones
 change — with comments, with `1/3` ratios, with errors that name the line, with
