@@ -165,6 +165,33 @@ struct Layout: Equatable {
         zones.map { Coords.cgToView(frame(of: $0, in: area), filling: area) }
     }
 
+    /// The **hit regions** in those same view coordinates: `rect`, which tiles,
+    /// rather than `frame`, which does not.
+    ///
+    /// It is the counterpart of `viewFrames` and the two must not be confused,
+    /// which is why they are named after what they answer rather than after
+    /// where they are used. The editor draws frames and hit-tests these; asking
+    /// the drawn rectangles instead would turn every gap into a band where
+    /// clicking selects nothing and no label explains why — the same bug §3e
+    /// found in the drop path, one screen further up.
+    func hitRects(in area: CGRect) -> [CGRect] {
+        zones.map { Coords.cgToView($0.rect(in: area), filling: area) }
+    }
+
+    /// Smallest rectangle containing the point, by index, or `nil`.
+    ///
+    /// **The rule that makes overlapping zones usable**, and it lives in one
+    /// place because there are now two coordinate systems that need it and a
+    /// second copy would be a second chance to get the tie-break backwards. A
+    /// layout with one big zone behind several small ones is a thing a config
+    /// file exists to let you write, and without smallest-wins the big one eats
+    /// every target.
+    static func smallestIndex(containing point: CGPoint, in rects: [CGRect]) -> Int? {
+        rects.indices
+            .filter { rects[$0].contains(point) }
+            .min { rects[$0].width * rects[$0].height < rects[$1].width * rects[$1].height }
+    }
+
     /// Three columns 25 / 50 / 25: the middle one for the window being worked
     /// on and the side ones for whatever is being consulted. It is the layout
     /// that pays off the most on a wide monitor, and it serves as a starting
@@ -199,11 +226,7 @@ struct Layout: Equatable {
     /// as nobody duplicated a zone — and with a config file people duplicate
     /// zones, that is what a config file is for.
     func zoneIndex(under point: CGPoint, in area: CGRect) -> Int? {
-        zones.indices
-            .map { (index: $0, rect: zones[$0].rect(in: area)) }
-            .filter { $0.rect.contains(point) }
-            .min { $0.rect.width * $0.rect.height < $1.rect.width * $1.rect.height }?
-            .index
+        Layout.smallestIndex(containing: point, in: zones.map { $0.rect(in: area) })
     }
 
     /// The zone itself, for the callers that do not care which one it is.

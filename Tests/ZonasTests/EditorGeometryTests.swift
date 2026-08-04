@@ -87,6 +87,47 @@ struct EditorGeometryTests {
         #expect(columns[2].maxX == area.width)
     }
 
+    /// The counterpart of `viewFrames`, and the reason there are two functions.
+    /// What the editor draws is separated by the gap; what it hit-tests is not,
+    /// or the gutter between two zones becomes a band where clicking selects
+    /// nothing and nothing on screen explains why.
+    @Test("The hit regions tile the window even though the drawn ones do not")
+    func hitRegionsTileTheWindow() {
+        let layout = Layout.threeColumns          // gap 8
+        let hits = layout.hitRects(in: area)
+        let drawn = layout.viewFrames(in: area)
+
+        #expect(hits[0].maxX == hits[1].minX)
+        #expect(hits[1].maxX == hits[2].minX)
+        #expect(hits[0].minX == 0)
+        #expect(hits[2].maxX == area.width)
+        #expect(drawn[1].minX - drawn[0].maxX == Layout.defaultGap)
+
+        // A click in the gutter — outside both drawn rectangles — still lands
+        // in a zone.
+        let gutter = CGPoint(x: (drawn[0].maxX + drawn[1].minX) / 2, y: 700)
+        #expect(drawn.allSatisfy { !$0.contains(gutter) })
+        #expect(Layout.smallestIndex(containing: gutter, in: hits) != nil)
+    }
+
+    /// Smallest-wins, asked in the editor's coordinates rather than the drop's.
+    /// A layout with one big zone behind a small one is what a config file is
+    /// for, and the editor has to be able to reach the small one.
+    @Test("A zone on top of a bigger one is the one the editor picks")
+    func theSmallestZoneWinsInViewSpaceToo() {
+        let layout = Layout(name: "Stacked", zones: [
+            Zone(name: "Everything", x: 0,    y: 0,    width: 1,   height: 1),
+            Zone(name: "Middle",     x: 0.25, y: 0.25, width: 0.5, height: 0.5),
+        ])
+        let hits = layout.hitRects(in: area)
+
+        let middle = CGPoint(x: area.width / 2, y: area.height / 2)
+        let corner = CGPoint(x: 10, y: 10)
+        #expect(Layout.smallestIndex(containing: middle, in: hits) == 1)
+        #expect(Layout.smallestIndex(containing: corner, in: hits) == 0)
+        #expect(Layout.smallestIndex(containing: CGPoint(x: -1, y: -1), in: hits) == nil)
+    }
+
     /// The editor draws `frame` and the drop sets `frame` — the same call, with
     /// the same gap and the same margin. §3e was the bug where those two were
     /// different numbers living in different files, and the editor is the place
