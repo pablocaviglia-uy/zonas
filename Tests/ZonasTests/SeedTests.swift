@@ -51,4 +51,17 @@ struct SeedTests {
             #expect(LayoutFile.read(url) == nil)
         }
     }
+
+    /// Perfectly good JSON5 that is not a layout. It has to be refused the same
+    /// way, or a file with a typo in a key would load as an empty layout and the
+    /// zones would just quietly stop being there.
+    @Test("A file that parses but is not a layout reads as nothing either")
+    func invalidLayoutsReadAsNil() throws {
+        try inTemporaryDirectory { dir in
+            let url = dir.appendingPathComponent("layout.json")
+            try Data(#"{ name: "Fine", zonas: [] }"#.utf8).write(to: url)
+
+            #expect(LayoutFile.read(url) == nil)
+        }
+    }
 }

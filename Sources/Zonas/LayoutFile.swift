@@ -83,19 +83,16 @@ enum LayoutFile {
     /// working — but the **reason** is always in the log. The `try?`s that used
     /// to be here swallowed it, and one comma too many looked exactly like
     /// having no file at all.
+    ///
+    /// It goes through `LayoutSyntax` and not through `JSONDecoder`, and the
+    /// difference the user sees is the line number. `JSONDecoder` reports a byte
+    /// offset into the data, which nobody has ever managed to find in their own
+    /// config file.
     static func read(_ url: URL) -> Layout? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         do {
-            let decoder = JSONDecoder()
-            // Comments, unquoted keys, trailing commas and `.25`, for one line
-            // and no dependency — `allowsJSON5` is Foundation's. That is most of
-            // why the format is JSON5 and not TOML: TOMLKit would mean C++
-            // interop inside an executable that has to be signed and notarized.
-            //
-            // JSON5 is a superset of JSON, so every file written before this
-            // still reads.
-            decoder.allowsJSON5 = true
-            return try decoder.decode(Layout.self, from: Data(contentsOf: url))
+            let text = try String(contentsOf: url, encoding: .utf8)
+            return try Layout(LayoutSyntax.parse(text))
         } catch {
             Log.write("layout: FAILED to read \(url.path) — \(error)")
             Log.write("layout: the file is NOT touched")

@@ -17,7 +17,13 @@ import Foundation
 /// In the file the handle is `name`, unique within its layout. The stable
 /// identity the editor needs is a different thing, it lives in memory, and it
 /// never reaches disk.
-struct Zone: Codable, Equatable {
+///
+/// **Not `Codable`, on purpose.** Reading goes through `LayoutSyntax`, which is
+/// what carries the line numbers, and writing has to render from the tree or
+/// unknown keys and every comment vanish. Leaving the conformance on would leave
+/// a one-line path back to both of those, and it is exactly the line somebody
+/// reaches for when they are in a hurry.
+struct Zone: Equatable {
     var name: String
     var x: Double
     var y: Double
@@ -75,7 +81,7 @@ struct Zone: Codable, Equatable {
 /// comparing rendered text. `Zone` already was; the pair only became meaningful
 /// once `id` left the schema, because until then two reads of the very same
 /// file compared different.
-struct Layout: Codable, Equatable {
+struct Layout: Equatable {
     var name: String
     var zones: [Zone]
 

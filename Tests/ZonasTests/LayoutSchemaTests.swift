@@ -28,19 +28,11 @@ struct LayoutSchemaTests {
         ])
     }
 
-    /// The bridge test: while both readers exist, they have to agree. Two
-    /// decoders that can disagree about the same file is the bug this whole
-    /// session has been about.
-    @Test("It reads the starting file the same way JSONDecoder does")
-    func itAgreesWithTheOldReader() throws {
-        let decoder = JSONDecoder()
-        decoder.allowsJSON5 = true
-
-        let throughTheTree = try layout(LayoutFile.seed)
-        let throughCodable = try decoder.decode(Layout.self, from: Data(LayoutFile.seed.utf8))
-
-        #expect(throughTheTree == throughCodable)
-        #expect(throughTheTree == .threeColumns)
+    /// The starting file and the built-in layout have to stay the same thing,
+    /// or the app behaves one way today and another after a restart.
+    @Test("It reads the starting file as the built-in layout")
+    func itReadsTheSeed() throws {
+        #expect(try layout(LayoutFile.seed) == .threeColumns)
     }
 
     /// Keys from a newer version of the app must not stop an older one from

@@ -7,9 +7,9 @@ struct ZoneDecodingTests {
 
     /// `id` left the schema, and files written before that did not.
     ///
-    /// Nothing had to be written for this to keep working — JSONDecoder ignores
-    /// keys it does not know — which is precisely why it deserves a test: the
-    /// compatibility is accidental, so nothing would tell you the day it broke.
+    /// The reader ignores keys it does not know, so nothing had to be written
+    /// for this to keep working — which is precisely why it deserves a test: the
+    /// compatibility is free, so nothing would tell you the day it stopped.
     @Test("A file written when zones still carried ids still reads")
     func decodesFilesWrittenWithIDs() throws {
         let json = """
@@ -28,7 +28,7 @@ struct ZoneDecodingTests {
         }
         """
 
-        let layout = try JSONDecoder().decode(Layout.self, from: Data(json.utf8))
+        let layout = try Layout(LayoutSyntax.parse(json))
 
         #expect(layout.name == "Three Columns")
         #expect(layout.zones == [Zone(name: "Left", x: 0, y: 0, width: 0.25, height: 1)])
@@ -46,13 +46,13 @@ struct ZoneDecodingTests {
     /// a fresh UUID per read made every read different from the last.
     @Test("Two reads of the same bytes compare equal")
     func readingIsStable() throws {
-        let json = Data("""
+        let json = """
         { "name": "Three Columns",
           "zones": [ { "name": "Left", "x": 0, "y": 0, "width": 0.25, "height": 1 } ] }
-        """.utf8)
+        """
 
-        let first = try JSONDecoder().decode(Layout.self, from: json)
-        let second = try JSONDecoder().decode(Layout.self, from: json)
+        let first = try Layout(LayoutSyntax.parse(json))
+        let second = try Layout(LayoutSyntax.parse(json))
 
         #expect(first == second)
     }
