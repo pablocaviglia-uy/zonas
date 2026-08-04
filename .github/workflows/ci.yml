@@ -1,0 +1,37 @@
+name: CI
+
+# There were no tests and nothing running them. That is worth fixing on its own,
+# but it is also a prerequisite: the plan calls the comment conservation test a
+# merge condition (docs/PLAN.md §10), and a merge condition nothing runs is a
+# wish. This is the place it will run from.
+#
+# Building the signed .app is deliberately not here. That needs the Developer ID
+# in the keychain, and `build.sh` is the thing that does it, on a machine that
+# has one.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Printed rather than pinned: the package asks for Swift 6 tools and
+      # macOS 14, and when a runner image moves out from under that, the version
+      # in the log is the first thing anybody will want to see.
+      - name: Toolchain
+        run: swift --version
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
