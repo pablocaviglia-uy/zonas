@@ -40,7 +40,7 @@ struct EditorEdgeTests {
     @Test("Every zone on the line comes with it, including ones that only touch")
     func theWholeLineIsGathered() {
         let doc = desk()
-        let edge = doc.edge(along: .vertical, near: 0.25, across: 0.2)
+        let edge = doc.edge(along: .vertical, near: 0.25, across: 0.2, within: 0.01)
 
         #expect(edge?.leading == [rid(doc, "Centre")])
         #expect(edge?.trailing.count == 2)
@@ -65,7 +65,7 @@ struct EditorEdgeTests {
             Zone(name: "BR", x: 0.5, y: 0.5, width: 0.5, height: 0.5),
         ]))
 
-        let edge = doc.edge(along: .vertical, near: 0.5, across: 0.2)
+        let edge = doc.edge(along: .vertical, near: 0.5, across: 0.2, within: 0.01)
 
         #expect(edge?.zoneCount == 4)
         #expect(edge?.from == 0)
@@ -80,7 +80,7 @@ struct EditorEdgeTests {
             Zone(name: "L", x: 0,      y: 0, width: 0.3333, height: 1),
             Zone(name: "R", x: 0.3334, y: 0, width: 0.6666, height: 1),
         ]))
-        let edge = doc.edge(along: .vertical, near: 0.3333, across: 0.5)
+        let edge = doc.edge(along: .vertical, near: 0.3333, across: 0.5, within: 0.01)
         #expect(edge?.zoneCount == 2)
 
         doc.move(edge!, to: 0.5, minimum: 0.01)
@@ -96,8 +96,26 @@ struct EditorEdgeTests {
             Zone(name: "R", x: 0.32, y: 0, width: 0.68, height: 1),
         ]))
 
-        #expect(doc.edge(along: .vertical, near: 0.30, across: 0.5)?.zoneCount == 1)
-        #expect(doc.edge(along: .vertical, near: 0.32, across: 0.5)?.zoneCount == 1)
+        #expect(doc.edge(along: .vertical, near: 0.30, across: 0.5, within: 0.01)?.zoneCount == 1)
+        #expect(doc.edge(along: .vertical, near: 0.32, across: 0.5, within: 0.01)?.zoneCount == 1)
+    }
+
+    /// Reach and tolerance are different numbers, and here is the case that says
+    /// so out loud: the cursor is far enough from the line that a single shared
+    /// number would have to be at least this big, and a second line that far
+    /// away must still not be gathered.
+    @Test("Reaching a line is not the same as gathering everything near it")
+    func reachAndToleranceAreDifferentNumbers() {
+        let doc = EditorDocument(Layout(name: "Gapped", zones: [
+            Zone(name: "L", x: 0,    y: 0, width: 0.3,  height: 1),
+            Zone(name: "R", x: 0.32, y: 0, width: 0.68, height: 1),
+        ]))
+
+        // Reaching from between the two, nearer to the first.
+        let edge = doc.edge(along: .vertical, near: 0.305, across: 0.5, within: 0.02)
+
+        #expect(edge?.coordinate == 0.3)
+        #expect(edge?.zoneCount == 1)      // the other line is reachable, not collinear
     }
 
     /// A vertical line broken in the middle by a full-width zone is two
@@ -113,8 +131,8 @@ struct EditorEdgeTests {
             Zone(name: "BR",   x: 0.5, y: 0.7, width: 0.5, height: 0.3),
         ]))
 
-        let top = doc.edge(along: .vertical, near: 0.5, across: 0.1)
-        let bottom = doc.edge(along: .vertical, near: 0.5, across: 0.9)
+        let top = doc.edge(along: .vertical, near: 0.5, across: 0.1, within: 0.01)
+        let bottom = doc.edge(along: .vertical, near: 0.5, across: 0.9, within: 0.01)
 
         #expect(top?.zoneCount == 2)
         #expect(bottom?.zoneCount == 2)
@@ -131,19 +149,19 @@ struct EditorEdgeTests {
     func theScreenIsNotADivider() {
         let doc = desk()
 
-        #expect(doc.edge(along: .vertical, near: 0, across: 0.5) == nil)
-        #expect(doc.edge(along: .vertical, near: 1, across: 0.5) == nil)
-        #expect(doc.edge(along: .horizontal, near: 0, across: 0.5) == nil)
-        #expect(doc.edge(along: .horizontal, near: 1, across: 0.5) == nil)
+        #expect(doc.edge(along: .vertical, near: 0, across: 0.5, within: 0.01) == nil)
+        #expect(doc.edge(along: .vertical, near: 1, across: 0.5, within: 0.01) == nil)
+        #expect(doc.edge(along: .horizontal, near: 0, across: 0.5, within: 0.01) == nil)
+        #expect(doc.edge(along: .horizontal, near: 1, across: 0.5, within: 0.01) == nil)
     }
 
     @Test("Nothing is grabbed where there is no line")
     func nothingWhereThereIsNoLine() {
         let doc = desk()
-        #expect(doc.edge(along: .vertical, near: 0.5, across: 0.5) == nil)
+        #expect(doc.edge(along: .vertical, near: 0.5, across: 0.5, within: 0.01) == nil)
         // The horizontal line at y = 0.5 only exists in the left quarter.
-        #expect(doc.edge(along: .horizontal, near: 0.5, across: 0.1)?.zoneCount == 2)
-        #expect(doc.edge(along: .horizontal, near: 0.5, across: 0.6) == nil)
+        #expect(doc.edge(along: .horizontal, near: 0.5, across: 0.1, within: 0.01)?.zoneCount == 2)
+        #expect(doc.edge(along: .horizontal, near: 0.5, across: 0.6, within: 0.01) == nil)
     }
 
     // MARK: - Moving it
@@ -151,7 +169,7 @@ struct EditorEdgeTests {
     @Test("Both sides of the line move by the one number")
     func bothSidesMoveTogether() {
         var doc = desk()
-        let edge = doc.edge(along: .vertical, near: 0.25, across: 0.2)!
+        let edge = doc.edge(along: .vertical, near: 0.25, across: 0.2, within: 0.01)!
 
         let moved = doc.move(edge, to: 0.4, minimum: 0.01)
 
@@ -169,7 +187,7 @@ struct EditorEdgeTests {
     @Test("A horizontal line moves the zones above and below it")
     func horizontalLinesWorkTheSameWay() {
         var doc = desk()
-        let edge = doc.edge(along: .horizontal, near: 0.5, across: 0.1)!
+        let edge = doc.edge(along: .horizontal, near: 0.5, across: 0.1, within: 0.01)!
 
         let moved = doc.move(edge, to: 0.25, minimum: 0.01)
 
@@ -186,7 +204,7 @@ struct EditorEdgeTests {
     @Test("A line stops against the smallest zone it would create")
     func draggingIsClampedNotRefused() {
         var doc = desk()
-        let edge = doc.edge(along: .vertical, near: 0.25, across: 0.2)!
+        let edge = doc.edge(along: .vertical, near: 0.25, across: 0.2, within: 0.01)!
 
         let moved = doc.move(edge, to: 0.99, minimum: 0.1)
         #expect(moved)
@@ -200,7 +218,7 @@ struct EditorEdgeTests {
     @Test("A line dragged back to where it started is not an undo step")
     func aDragThatChangesNothingIsNotRecorded() {
         var doc = desk()
-        let edge = doc.edge(along: .vertical, near: 0.25, across: 0.2)!
+        let edge = doc.edge(along: .vertical, near: 0.25, across: 0.2, within: 0.01)!
 
         let moved = doc.move(edge, to: 0.25, minimum: 0.01)
         #expect(moved == false)
@@ -212,7 +230,7 @@ struct EditorEdgeTests {
     func movingIsUndoable() {
         var doc = desk()
         let before = doc
-        let edge = doc.edge(along: .vertical, near: 0.25, across: 0.2)!
+        let edge = doc.edge(along: .vertical, near: 0.25, across: 0.2, within: 0.01)!
 
         doc.move(edge, to: 0.4, minimum: 0.01)
         doc.undo()

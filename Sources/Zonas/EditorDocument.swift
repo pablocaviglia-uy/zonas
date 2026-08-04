@@ -265,21 +265,34 @@ struct EditorDocument: Equatable {
     ///     segment from another when a coordinate carries several — a vertical
     ///     line broken in the middle by a full-width zone is two dividers, and
     ///     moving one must not move the other.
+    ///   - reach: how far the cursor may be from a line and still be grabbing
+    ///     it. **Not the same number as `tolerance`, and confusing the two is
+    ///     the bug this signature exists to prevent**: reach is about aim and is
+    ///     tens of points, tolerance is about what counts as one line and is a
+    ///     rounding error. On the ultrawide a comfortable reach is already wider
+    ///     than the coalescence tolerance, so a single number would either make
+    ///     dividers unclickable or glue unrelated ones together.
     ///
     /// The group grows from the side under the cursor by extents that overlap
-    /// **or touch**, transitively. Touching matters: two zones stacked one above
-    /// the other meet exactly, share no interior, and are plainly one line to
-    /// anybody looking at the screen.
+    /// **or touch**, transitively. Touching matters: four zones stacked two and
+    /// two meet at a point, share no interior at all, and are plainly one line
+    /// to anybody looking at the screen.
     func edge(along axis: Cut, near coordinate: Double, across: Double,
+              within reach: Double,
               tolerance: Double = EditorDocument.coalescence) -> EditorEdge? {
-        let candidates = sides(along: axis).filter {
+        let all = sides(along: axis).filter {
             $0.coordinate > Self.screenBoundary && $0.coordinate < 1 - Self.screenBoundary
-                && abs($0.coordinate - coordinate) <= tolerance
         }
-        guard let seed = candidates
-            .filter({ $0.from <= across && across <= $0.to })
+        guard let seed = all
+            .filter({ $0.from <= across && across <= $0.to
+                      && abs($0.coordinate - coordinate) <= reach })
             .min(by: { abs($0.coordinate - coordinate) < abs($1.coordinate - coordinate) })
         else { return nil }
+
+        // Gathered around the **seed**, not around the cursor: the line you are
+        // holding is the one you pointed at, and what comes with it is measured
+        // from there.
+        let candidates = all.filter { abs($0.coordinate - seed.coordinate) <= tolerance }
 
         var group = [seed]
         var grew = true

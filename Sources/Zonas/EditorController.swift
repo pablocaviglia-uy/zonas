@@ -137,6 +137,9 @@ final class EditorController {
             window.onSplit = { [weak self] rid, fraction, cut, minimum in
                 self?.split(rid: rid, at: fraction, cut, minimum: minimum)
             }
+            window.onMove = { [weak self] edge, coordinate, minimum in
+                self?.move(edge, to: coordinate, minimum: minimum)
+            }
             windows[display] = window
         }
         render()
@@ -150,6 +153,7 @@ final class EditorController {
             window.onCancel = nil
             window.onUndo = nil
             window.onSplit = nil
+            window.onMove = nil
             window.orderOut(nil)
         }
         windows.removeAll()
@@ -173,6 +177,17 @@ final class EditorController {
         guard document.split(rid: rid, at: fraction, cut, minimum: minimum) else { return }
         self.document = document
         Log.write("editor: split into \(document.zones.count) zones")
+        render()
+    }
+
+    /// One call at the end of the gesture, not one per `mouseDragged` — so a
+    /// divider dragged across the screen is one ⌘Z and not two hundred.
+    private func move(_ edge: EditorEdge, to coordinate: Double, minimum: Double) {
+        guard var document else { return }
+        guard document.move(edge, to: coordinate, minimum: minimum) else { return }
+        self.document = document
+        Log.write("editor: moved a \(edge.axis == .vertical ? "vertical" : "horizontal") line "
+                  + "carrying \(edge.zoneCount) zone(s)")
         render()
     }
 
@@ -246,6 +261,7 @@ final class EditorWindow: NSWindow {
     /// for. The window reports what happened in it; the controller decides.
     var onUndo: (() -> Void)?
     var onSplit: ((_ rid: Int, _ fraction: Double, _ cut: Cut, _ minimum: Double) -> Void)?
+    var onMove: ((_ edge: EditorEdge, _ to: Double, _ minimum: Double) -> Void)?
 
     var editorView: EditorView? { contentView as? EditorView }
 
@@ -347,20 +363,38 @@ final class EditorView: NSView {
         let name: String
     }
 
-    /// What a click right now would do.
+    /// What the mouse right now would do.
     ///
     /// It is recomputed from the cursor rather than remembered, so there is no
     /// state to get out of step with the pointer — and it is `Equatable` so that
     /// a redraw only happens when the answer changed. A `mouseMoved` arrives
     /// dozens of times a second and this view is 5120 points wide.
-    private struct Hover: Equatable {
-        let rid: Int
-        let cut: Cut
-        /// Where the cut would fall, as a fraction of the screen's usable area
-        /// along the axis being cut — the units the document works in.
-        let fraction: Double
-        /// The line to draw, in view coordinates.
-        let line: CGRect
+    ///
+    /// **An edge in reach always wins**, and the two bands are the same number
+    /// on purpose. A click is refused within `smallestPiece` of a boundary
+    /// because it would leave a sliver; that is exactly the band where the
+    /// intent is "move this line" rather than "cut here". Making them one
+    /// number means every point of the editor does something, and it costs
+    /// nothing: a horizontal cut is decided by the cursor's *y* alone, so
+    /// giving up the outer 40 points of *x* gives up no cut you could not make
+    /// forty points along.
+    private enum Pending: Equatable {
+        /// Where the cut would fall, as a fraction of the usable area along the
+        /// axis being cut — the units the document works in — plus the line to
+        /// draw, in view coordinates.
+        case split(rid: Int, cut: Cut, fraction: Double, line: CGRect)
+        case edge(EditorEdge, line: CGRect)
+    }
+
+    /// A line being held. The seed is what was under the cursor when it was
+    /// grabbed, kept so that ⌥ can be pressed and released **during** the drag
+    /// and still resolve to the same single side each time.
+    private struct Grab: Equatable {
+        let axis: Cut
+        let seed: Double
+        let across: Double
+        let soloRid: Int?
+        var target: Double
     }
 
     /// §5 says "the real desktop dimmed to 40%", and this is the reading it
@@ -371,14 +405,17 @@ final class EditorView: NSView {
     /// seeing what your zones would do to the windows you actually have open.
     private static let desktopBrightness: CGFloat = 0.4
 
-    /// The narrowest piece a click is allowed to leave behind, in points.
+    /// The narrowest piece an edit is allowed to leave behind, in points, and
+    /// also how far from a line you can be and still be grabbing it.
     ///
     /// Not a judgement about useful window sizes — it is there so that a click
     /// aimed at a boundary does not become a sliver. That makes the number a
     /// question about aim, and the answer is "comfortably more than the eight
-    /// points the drag threshold already calls a steady hand". Below this the
-    /// cut line is not drawn at all, so the rule explains itself: no line, no
-    /// split, and you can see where the band ends.
+    /// points the drag threshold already calls a steady hand".
+    ///
+    /// One number for both jobs because they are the same band seen from two
+    /// sides: near a boundary a click cannot mean "split", and it obviously
+    /// means "move this". See `Pending`.
     private static let smallestPiece: CGFloat = 40
 
     /// The screen's usable area in CG coordinates. Zones are fractions of this,
@@ -396,7 +433,9 @@ final class EditorView: NSView {
     /// and the mouse has to move the line while ⇧ is still held.
     private var cursor: CGPoint?
     private var shiftHeld = false
-    private var hover: Hover?
+    private var optionHeld = false
+    private var pending: Pending?
+    private var grab: Grab?
     private var mouseDownAt: CGPoint?
 
     private var host: EditorWindow? { window as? EditorWindow }
@@ -413,9 +452,9 @@ final class EditorView: NSView {
     func show(_ document: EditorDocument, note: String?) {
         self.document = document
         self.note = note
-        // The document just changed under the cursor, so what a click would do
-        // has changed with it.
-        recomputeHover()
+        // The document just changed under the cursor, so what the mouse would
+        // do has changed with it.
+        recomputePending()
         updateHUD()
         needsDisplay = true
     }
@@ -434,22 +473,51 @@ final class EditorView: NSView {
         }
     }
 
-    /// The document as it would be if you clicked now.
+    /// The document as it would be if you let go now.
     ///
-    /// It is a whole candidate document and not two rectangles worked out by
-    /// hand, which is the point: the preview goes through the same `split` and
-    /// the same `viewFrames` as the real thing, so it cannot show you a
-    /// different answer from the one you are about to get. `EditorDocument` is
-    /// a value type precisely so this costs a copy and risks nothing.
-    private func candidate(for hover: Hover) -> EditorDocument? {
+    /// It is a whole candidate document and not a few rectangles worked out by
+    /// hand, which is the point: the preview goes through the same `split`, the
+    /// same `move` and the same `viewFrames` as the real thing, so it cannot
+    /// show you a different answer from the one you are about to get — including
+    /// the clamping, which therefore stops on screen exactly where it stops in
+    /// the file. `EditorDocument` is a value type precisely so this costs a copy
+    /// and risks nothing.
+    private func candidate(for pending: Pending) -> EditorDocument? {
         guard var document else { return nil }
-        guard document.split(rid: hover.rid, at: hover.fraction, hover.cut,
-                             minimum: minimumFraction(for: hover.cut)) else { return nil }
+        switch pending {
+        case let .split(rid, cut, fraction, _):
+            guard document.split(rid: rid, at: fraction, cut,
+                                 minimum: minimumFraction(along: cut)) else { return nil }
+        case let .edge(edge, _):
+            // Merely pointing at a line changes nothing; only holding it does.
+            guard let grab else { return nil }
+            guard document.move(edge, to: grab.target,
+                                minimum: minimumFraction(along: edge.axis)) else { return nil }
+        }
         return document
     }
 
-    private func minimumFraction(for cut: Cut) -> Double {
-        Self.smallestPiece / (cut == .vertical ? area.width : area.height)
+    private func minimumFraction(along axis: Cut) -> Double {
+        Self.smallestPiece / (axis == .vertical ? area.width : area.height)
+    }
+
+    /// A fraction of the usable area, along an axis and across it.
+    private func fractions(of point: CGPoint, along axis: Cut) -> (across: Double, along: Double) {
+        // X is a straight scale; Y is measured from the top, because that is the
+        // end `Zone.y` counts from and this view counts from the other one.
+        let x = Double(point.x / area.width)
+        let y = Double(1 - point.y / area.height)
+        return axis == .vertical ? (x, y) : (y, x)
+    }
+
+    private func line(of edge: EditorEdge) -> CGRect {
+        let from = edge.axis == .vertical
+            ? CGFloat(1 - edge.to) * area.height : CGFloat(edge.from) * area.width
+        let to = edge.axis == .vertical
+            ? CGFloat(1 - edge.from) * area.height : CGFloat(edge.to) * area.width
+        return edge.axis == .vertical
+            ? CGRect(x: CGFloat(edge.coordinate) * area.width, y: from, width: 0, height: to - from)
+            : CGRect(x: from, y: CGFloat(1 - edge.coordinate) * area.height, width: to - from, height: 0)
     }
 
     private func updateHUD() {
@@ -459,15 +527,31 @@ final class EditorView: NSView {
         // the fractions are fractions of — and the difference between the two
         // numbers is the menu bar and the Dock, which is exactly the thing this
         // window is sitting below in order to show.
-        hud.show(title: document.name,
-                 // A note displaces the status line rather than adding to it:
-                 // when the file is broken or has moved underneath you, that is
-                 // the only thing on this bar worth reading.
-                 hint: note ?? "\(zones) · \(Int(area.width)) × \(Int(area.height)) usable",
-                 keys: document.canUndo
-                     ? "Click to split · ⇧ rotates the cut · ⌘Z undo · ⎋ close"
-                     : "Click to split · ⇧ rotates the cut · ⎋ close")
-        layOutHUD()
+        let changed = hud.show(
+            title: document.name,
+            // A note displaces the status line rather than adding to it: when
+            // the file is broken or has moved underneath you, that is the only
+            // thing on this bar worth reading.
+            hint: note ?? "\(zones) · \(Int(area.width)) × \(Int(area.height)) usable",
+            keys: keys(document))
+        if changed { layOutHUD() }
+    }
+
+    /// §5's contextual help line, and the direct answer to the complaint that
+    /// sank FancyZones' editor: the number one issue against it is called "how
+    /// to remove a zone", because its gestures were undiscoverable and nothing
+    /// on screen said otherwise. This line says what the thing under the cursor
+    /// does, and it costs one label.
+    private func keys(_ document: EditorDocument) -> String {
+        let undo = document.canUndo ? " · ⌘Z undo" : ""
+        switch pending {
+        case .split:
+            return "Click to split · ⇧ rotates the cut\(undo) · ⎋ close"
+        case .edge:
+            return "Drag to move the line · ⌥ moves one side only\(undo) · ⎋ close"
+        case nil:
+            return "Click a zone to split it · drag a divider to move it\(undo) · ⎋ close"
+        }
     }
 
     // MARK: - The cursor
@@ -488,62 +572,116 @@ final class EditorView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) { cursorMoved(to: event) }
-    override func mouseDragged(with event: NSEvent) { cursorMoved(to: event) }
     override func mouseEntered(with event: NSEvent) { cursorMoved(to: event) }
 
     /// The cursor left this screen — most often for the other one, which has its
-    /// own window and its own hover. Leaving the line drawn here would put two
-    /// cut lines on the desk at once, only one of which a click would honour.
+    /// own window and its own idea of what the mouse would do. Leaving the line
+    /// drawn here would put two of them on the desk at once, only one of which
+    /// the mouse would honour.
+    ///
+    /// **Unless a line is being held**, in which case leaving is normal: a
+    /// divider dragged to the far side of a 5120-point screen goes past the edge
+    /// constantly, and the gesture belongs to this view until the mouse comes
+    /// up wherever it comes up.
     override func mouseExited(with event: NSEvent) {
+        guard grab == nil else { return }
         cursor = nil
-        setHover(nil)
+        setPending(nil)
     }
 
     func modifiersChanged(to flags: NSEvent.ModifierFlags) {
         shiftHeld = flags.contains(.shift)
-        recomputeHover()
+        optionHeld = flags.contains(.option)
+        recomputePending()
     }
 
     private func cursorMoved(to event: NSEvent) {
         cursor = convert(event.locationInWindow, from: nil)
         shiftHeld = event.modifierFlags.contains(.shift)
-        recomputeHover()
+        optionHeld = event.modifierFlags.contains(.option)
+        recomputePending()
     }
 
-    private func recomputeHover() {
-        guard let document, let cursor else { return setHover(nil) }
+    private func recomputePending() {
+        guard let document, let cursor else { return setPending(nil) }
+
+        // Holding a line: the cursor sets where it goes and nothing else is on
+        // offer until it is let go.
+        if var grab {
+            grab.target = fractions(of: cursor, along: grab.axis).across
+            self.grab = grab
+            guard let edge = resolve(grab) else { return setPending(nil) }
+            return setPending(.edge(edge, line: line(of: edge)))
+        }
+
+        // An edge in reach wins over a cut. See `Pending`.
+        if let edge = edgeInReach(of: cursor, in: document) {
+            return setPending(.edge(edge, line: line(of: edge)))
+        }
 
         let hits = document.layout.hitRects(in: area)
         guard let index = Layout.smallestIndex(containing: cursor, in: hits) else {
-            return setHover(nil)
+            return setPending(nil)
         }
         let rect = hits[index]
         let cut = shiftHeld ? Cut.default(for: rect).rotated : Cut.default(for: rect)
+        let fraction = fractions(of: cursor, along: cut).across
 
-        // The cursor's coordinate along the axis being cut, expressed as a
-        // fraction of the usable area — which is what the document speaks. X is
-        // a straight scale; Y is measured from the top, because that is the end
-        // `Zone.y` counts from and this view counts from the other one.
-        let fraction = cut == .vertical
-            ? Double(cursor.x / area.width)
-            : Double(1 - cursor.y / area.height)
+        let split = Pending.split(
+            rid: document.zones[index].rid, cut: cut, fraction: fraction,
+            line: cut == .vertical
+                ? CGRect(x: cursor.x, y: rect.minY, width: 0, height: rect.height)
+                : CGRect(x: rect.minX, y: cursor.y, width: rect.width, height: 0))
 
-        let line = cut == .vertical
-            ? CGRect(x: cursor.x, y: rect.minY, width: 0, height: rect.height)
-            : CGRect(x: rect.minX, y: cursor.y, width: rect.width, height: 0)
-
-        let candidate = Hover(rid: document.zones[index].rid, cut: cut,
-                              fraction: fraction, line: line)
         // A cut that would leave a sliver is simply not offered. No line is the
         // whole of the explanation, and it is a better one than a line that does
         // nothing when clicked.
-        setHover(self.candidate(for: candidate) == nil ? nil : candidate)
+        setPending(candidate(for: split) == nil ? nil : split)
     }
 
-    private func setHover(_ new: Hover?) {
-        guard new != hover else { return }   // a mouseMoved that changes nothing draws nothing
-        hover = new
+    /// The nearest divider within `smallestPiece` points, on either axis.
+    private func edgeInReach(of point: CGPoint, in document: EditorDocument) -> EditorEdge? {
+        var best: (edge: EditorEdge, distance: CGFloat)?
+        for axis in [Cut.vertical, Cut.horizontal] {
+            let (across, along) = fractions(of: point, along: axis)
+            let reach = Double(Self.smallestPiece / (axis == .vertical ? area.width : area.height))
+            guard let edge = document.edge(along: axis, near: across, across: along,
+                                           within: reach) else { continue }
+            let extent = axis == .vertical ? area.width : area.height
+            let distance = abs(CGFloat(edge.coordinate - across)) * extent
+            if best == nil || distance < best!.distance { best = (edge, distance) }
+        }
+        return best?.edge
+    }
+
+    /// The line a grab refers to right now, which depends on ⌥ — and therefore
+    /// has to be asked again rather than remembered, because ⌥ can be pressed
+    /// and released while the line is being held.
+    private func resolve(_ grab: Grab) -> EditorEdge? {
+        guard let document else { return nil }
+        if optionHeld, let solo = grab.soloRid {
+            return document.side(of: solo, along: grab.axis, nearest: grab.seed)
+        }
+        return document.edge(along: grab.axis, near: grab.seed, across: grab.across,
+                             within: minimumFraction(along: grab.axis))
+    }
+
+    private func setPending(_ new: Pending?) {
+        guard new != pending else { return }  // a mouseMoved that changes nothing draws nothing
+        pending = new
         needsDisplay = true
+        updateHUD()
+
+        // The cursor is the strongest affordance there is for "this can be
+        // dragged", and it is the one thing that tells a divider you can hold
+        // apart from a cut you can make — the two are otherwise both an accent
+        // line under the pointer.
+        switch new {
+        case .edge(let edge, _):
+            (edge.axis == .vertical ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).set()
+        default:
+            NSCursor.arrow.set()
+        }
     }
 
     // MARK: - The click
@@ -561,23 +699,58 @@ final class EditorView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) {
-        mouseDownAt = convert(event.locationInWindow, from: nil)
+        let point = convert(event.locationInWindow, from: nil)
+        mouseDownAt = point
         cursorMoved(to: event)
+
+        // Taking hold of a line. The seed is recorded here and never
+        // recalculated: what you are holding must not change under you because
+        // the cursor drifted past another divider halfway across the screen.
+        guard case let .edge(edge, _)? = pending, let document else { return }
+        let (across, along) = fractions(of: point, along: edge.axis)
+        let hits = document.layout.hitRects(in: area)
+        let solo = Layout.smallestIndex(containing: point, in: hits)
+            .map { document.zones[$0].rid }
+        grab = Grab(axis: edge.axis, seed: edge.coordinate, across: along,
+                    // Which single side ⌥ moves: the one belonging to the zone
+                    // the cursor was actually in. Decided once, at mouseDown,
+                    // because it is a question about where you started and not
+                    // about where the line has got to.
+                    soloRid: solo, target: across)
     }
 
-    /// The split happens on mouse **up**, and only if the cursor stayed put.
+    /// This is the method §5 chose AppKit for.
     ///
-    /// A click and the beginning of a drag are the same `mouseDown`, and the
-    /// next stretch of this editor is dragging edges. Deciding on the way up,
-    /// against the same eight-point threshold the drag monitor already uses,
-    /// means that gesture can be added without taking this one apart.
-    override func mouseUp(with event: NSEvent) {
-        defer { mouseDownAt = nil }
-        let up = convert(event.locationInWindow, from: nil)
-        guard let down = mouseDownAt, hypot(up.x - down.x, up.y - down.y) < 8 else { return }
-        guard let hover else { return }
+    /// The view that received `mouseDown` keeps receiving `mouseDragged` when
+    /// the cursor leaves its bounds — off the side of the screen, onto the other
+    /// monitor, anywhere — and it still receives the `mouseUp`. SwiftUI's
+    /// `DragGesture` on macOS is interrupted without ever calling `onEnded`, and
+    /// dragging a divider across 5120 points is a gesture that leaves the frame
+    /// constantly. That is not a preference about frameworks; it is the reason
+    /// this file exists in AppKit.
+    override func mouseDragged(with event: NSEvent) { cursorMoved(to: event) }
 
-        host?.onSplit?(hover.rid, hover.fraction, hover.cut, minimumFraction(for: hover.cut))
+    /// The edit happens on mouse **up**.
+    ///
+    /// A split needs the cursor to have stayed put, against the same eight
+    /// points the drag monitor already calls a steady hand. A moved line is
+    /// committed once, here, so the whole gesture is one undo step rather than
+    /// one per `mouseDragged`.
+    override func mouseUp(with event: NSEvent) {
+        defer {
+            mouseDownAt = nil
+            grab = nil
+            recomputePending()
+        }
+        let up = convert(event.locationInWindow, from: nil)
+
+        if let grab, case let .edge(edge, _)? = pending {
+            return host?.onMove?(edge, grab.target, minimumFraction(along: edge.axis)) ?? ()
+        }
+        guard let down = mouseDownAt, hypot(up.x - down.x, up.y - down.y) < 8 else { return }
+        guard case let .split(rid, cut, fraction, _)? = pending else { return }
+
+        host?.onSplit?(rid, fraction, cut, minimumFraction(along: cut))
     }
 
     private func layOutHUD() {
@@ -603,15 +776,16 @@ final class EditorView: NSView {
 
         guard let document else { return }
 
-        // While a cut is being offered, **the whole screen shows the layout you
+        // While an edit is on offer, **the whole screen shows the layout you
         // would get**, not the one you have with a line drawn over it. §5's "the
-        // screen is the preview" taken at its word: the two pieces are named and
-        // measured where they will be, so there is nothing left to imagine and
-        // no second representation that could disagree with the first.
-        let previewing = hover.flatMap(candidate(for:))
-        let hovered = previewing ?? document
+        // screen is the preview" taken at its word: every piece is named and
+        // measured where it will be, so there is nothing left to imagine and no
+        // second representation that could disagree with the first. It is also
+        // what makes the clamping legible — the line stops on screen exactly
+        // where it stops in the document, because it is the same `move`.
+        let previewing = pending.flatMap(candidate(for:))
 
-        for box in boxes(of: hovered) {
+        for box in boxes(of: previewing ?? document) {
             // **An outline and no fill**, which is where the drag overlay and
             // this part company, and it was measured rather than chosen.
             //
@@ -634,20 +808,36 @@ final class EditorView: NSView {
             draw(box)
         }
 
-        if let hover, previewing != nil { draw(hover) }
+        switch pending {
+        case let .split(_, _, _, line) where previewing != nil:
+            draw(line, width: 2, capped: false)
+        case let .edge(edge, line):
+            // Thicker, and with round caps, so a line you can *hold* does not
+            // look like a line you would *make*. The cursor says the same thing
+            // more loudly; this is what you see once you are already dragging
+            // and the pointer is somewhere off the side of the screen.
+            //
+            // When ⌥ has broken the coalescence the line is drawn only as far as
+            // the single side it now moves, which is the whole of the feedback
+            // for that modifier: you can see the divider shrink to one zone.
+            draw(grab == nil ? line : self.line(of: edge), width: 4, capped: true)
+        default:
+            break
+        }
     }
 
-    /// The cut itself, drawn over the preview it produced.
+    /// A cut or a divider, drawn over the preview it produced.
     ///
-    /// It is the accent colour for the same reason the drag overlay's active
-    /// zone is: in this app, accent means "this is what is about to happen".
-    private func draw(_ hover: Hover) {
-        let line = NSBezierPath()
-        line.move(to: CGPoint(x: hover.line.minX, y: hover.line.minY))
-        line.line(to: CGPoint(x: hover.line.maxX, y: hover.line.maxY))
-        line.lineWidth = 2
+    /// The accent colour for the same reason the drag overlay's active zone is:
+    /// in this app, accent means "this is what is about to happen".
+    private func draw(_ line: CGRect, width: CGFloat, capped: Bool) {
+        let path = NSBezierPath()
+        path.move(to: CGPoint(x: line.minX, y: line.minY))
+        path.line(to: CGPoint(x: line.maxX, y: line.maxY))
+        path.lineWidth = width
+        path.lineCapStyle = capped ? .round : .butt
         NSColor.controlAccentColor.setStroke()
-        line.stroke()
+        path.stroke()
     }
 
     private func draw(_ box: Box) {
@@ -760,10 +950,19 @@ final class EditorHUD: NSVisualEffectView {
         doneButton.action = #selector(EditorWindow.cancel(_:))
     }
 
-    func show(title: String, hint: String, keys: String) {
+    /// Returns whether anything actually changed, so that the view can skip
+    /// laying the bar out again. This is asked on every mouse move now that the
+    /// help line is contextual, and re-measuring three labels sixty times a
+    /// second to arrive at the same three strings is work worth not doing.
+    @discardableResult
+    func show(title: String, hint: String, keys: String) -> Bool {
+        guard titleLabel.stringValue != title
+                || hintLabel.stringValue != hint
+                || keysLabel.stringValue != keys else { return false }
         titleLabel.stringValue = title
         hintLabel.stringValue = hint
         keysLabel.stringValue = keys
         needsLayout = true
+        return true
     }
 }
