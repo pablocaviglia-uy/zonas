@@ -17,7 +17,7 @@ Spanish for *zones*.)
 
 **Status: prototype.** The whole path works end to end — detecting the drag,
 previewing the zones, moving the window — but zones are still edited by hand in
-a JSON file. There is no visual editor yet, and that is the main thing standing
+a text file. There is no visual editor yet, and that is the main thing standing
 between this and something you would recommend to someone else.
 
 ## Install
@@ -67,8 +67,8 @@ That is the only confirmation there is, and it is the one to wait for.
 
 Now hold **⇧ Shift** and drag any window. Three zones light up — a quarter, a
 half, a quarter — and dropping the window fills whichever one is under the
-cursor. Those three are just the layout it starts with; they live in a JSON
-file you can edit, see [The zones](#the-zones).
+cursor. Those three are just the layout it starts with; they live in a file you
+can edit, see [The zones](#the-zones).
 
 There is no automatic update yet. New versions are announced on the Releases
 page, and installing one is the same drag over the old copy — the Accessibility
@@ -167,25 +167,34 @@ the menu bar, the Dock and, on the machines that have one, the notch. Keeping
 them relative instead of in pixels is what makes the same layout work on the
 laptop screen and on an external monitor without redrawing it.
 
-```json
+The file the first launch writes is JSON5, so it can be written the way you
+would write it by hand — with comments, without quoting every key, and with a
+comma after the last item:
+
+```js
 {
-  "name": "Three Columns",
-  "zones": [
-    { "name": "Left",   "x": 0,    "y": 0, "width": 0.25, "height": 1 },
-    { "name": "Center", "x": 0.25, "y": 0, "width": 0.5,  "height": 1 },
-    { "name": "Right",  "x": 0.75, "y": 0, "width": 0.25, "height": 1 }
-  ]
+  name: "Three Columns",
+
+  // Editor in the middle, docs on the left, chat on the right.
+  zones: [
+    { name: "Left",   x: 0,    y: 0, width: 0.25, height: 1 },
+    { name: "Center", x: 0.25, y: 0, width: 0.5,  height: 1 },
+    { name: "Right",  x: 0.75, y: 0, width: 0.25, height: 1 },
+  ],
 }
 ```
 
 Edit the file and pick **Reload Zones** from the menu bar. Notes:
 
 - The file is written once, on first launch, and **never overwritten** after
-  that. Your zones are yours.
-- The `id` field is optional — leave it out and one is made up at load time.
-- If the JSON does not parse, the app says so in the log, leaves your file
-  exactly as it is and falls back to the built-in three-column layout. It will
-  not silently eat your edits.
+  that. Your zones, your comments and your ordering are yours.
+- Plain JSON is valid JSON5, so quoting the keys is fine too.
+- Windows land with a few points of air between them. The zone you see
+  highlighted during the drag is exactly the rectangle the window gets.
+- If the file does not parse, the app says so in the log and leaves your file
+  exactly as it is. It keeps the zones it was already using — a typo does not
+  take your layout with it — and only falls back to the built-in three columns
+  when there was nothing working to keep, which means at startup.
 - When zones overlap, **the smallest one containing the cursor wins**. That is
   what makes a layout with one big background zone and smaller ones on top of
   it usable.
@@ -398,7 +407,9 @@ laziness, it is that every signature invalidates the previous ticket.
 | `AXWindow.swift` | Reads and moves other apps' windows through the Accessibility API. |
 | `Coords.swift` | Converts between the two macOS coordinate systems — Cocoa's bottom-left origin and CoreGraphics' top-left one. The number one source of multi-monitor bugs. |
 | `OverlayController.swift` | The click-through translucent layer that draws the zones. |
-| `Zone.swift` | The model and its JSON persistence. |
+| `Zone.swift` | The model: zones, layouts, and which zone is under the cursor. |
+| `LayoutFile.swift` | Where the layout file is, reading and writing it, and the text of the one the first launch creates. |
+| `ZoneStore.swift` | The layout in memory. |
 | `AppDelegate.swift` | Menu bar, permission watchdog, wiring. |
 | `LaunchAtLogin.swift` | The login item, via `SMAppService`. |
 | `Log.swift` | Append-only file logging. |
