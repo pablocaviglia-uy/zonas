@@ -914,7 +914,7 @@ plug/unplug". The second is another feature, it is expensive and fragile, and
 macOS has already moved your windows before you find out. Do not put them in the
 same promise.
 
-### Stage 4 — Window robustness · 4 days · **before the editor**
+### Stage 4 — Window robustness · 4 days · **before the editor ships**
 
 Subrole filtering in `AXWindow.at`, per-app minimum sizes, Electron and Java
 (`AXEnhancedUserInterface` has to be turned off during the move in
@@ -925,6 +925,21 @@ move your Chrome window is worse than the reverse. The editor is used once a
 month; snapping is used a hundred times a day. This is also the stage that
 prevents the "doesn't work with my app" bucket of issues, which is what sinks a
 new repo's reputation.
+
+> **The heading used to say "before the editor" and that is no longer true** —
+> the editor was built first, out of order, for the reason given at the end of
+> §7's Stage 5 note. What has not changed is the release order: **nothing ships
+> before this stage does.** The argument above was about which disappointment a
+> stranger meets first, and building the editor early did not move that.
+>
+> This section is four lines against §5's four pages, and whoever picks it up
+> should expect to *design* it rather than follow it. Two things are already
+> known and worth not rediscovering: `AXWindow.at` walks up to the first element
+> whose role is `kAXWindowRole` and asks nothing about its subrole, so it will
+> happily hand back a sheet or a popover; and `AXWindow.setFrame` already
+> returns what it actually got, with `differs(asked:applied:)` next to it — the
+> instrument for "the app gave back something else" exists and nothing acts on
+> it yet.
 
 ### Stage 5 — The visual editor · 12 days
 
