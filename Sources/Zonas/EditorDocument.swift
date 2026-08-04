@@ -41,6 +41,39 @@ enum Cut: Equatable {
     var rotated: Cut { self == .vertical ? .horizontal : .vertical }
 }
 
+/// A line in the layout that can be grabbed and moved.
+///
+/// **There is no tree.** Splitting suggests one, and a tree does not fit in a
+/// file that is a flat list of rectangles — putting it there would make the file
+/// nested and horrible to hand-write, and reconstructing it on load is ambiguous
+/// and fragile. §5's answer is this: an edge is *derived*, worked out from the
+/// zones whenever it is needed and never stored. Two zones that share a boundary
+/// share it because their numbers say so, not because something remembers that
+/// they were once one zone.
+///
+/// The consequence that makes it worth it: because the zones on both sides are
+/// moved by one number, **the one-pixel gap becomes impossible by
+/// construction**. It cannot be introduced by dragging, only written on purpose.
+struct EditorEdge: Equatable {
+    /// Which way the line runs. `.vertical` is a vertical line, so it lives at
+    /// an *x* coordinate.
+    let axis: Cut
+    /// Where it sits, as a fraction of the screen's usable area.
+    let coordinate: Double
+    /// Zones whose **leading** side is on the line — `x`, or `y`. Moving the
+    /// line moves their origin and changes their size the other way.
+    let leading: [Int]
+    /// Zones whose **trailing** side is on it — `x + width`, or `y + height`.
+    /// Moving the line only changes their size.
+    let trailing: [Int]
+    /// How far the line runs along itself, for drawing it.
+    let from: Double
+    let to: Double
+
+    var isAlone: Bool { leading.count + trailing.count == 1 }
+    var zoneCount: Int { leading.count + trailing.count }
+}
+
 /// The layout the editor is working on, in memory.
 ///
 /// **It is not the file and it does not write one.** Splitting, and everything
@@ -181,6 +214,171 @@ struct EditorDocument: Equatable {
         let tail = name[name.index(after: space)...]
         guard !tail.isEmpty, tail.allSatisfy(\.isNumber) else { return name }
         return String(name[..<space])
+    }
+
+    // MARK: - Edges
+
+    /// How far off two edges may be and still count as the same line: §5's
+    /// half a percent of the screen.
+    ///
+    /// The number is a fraction and not a number of points on purpose. One
+    /// layout is drawn on every screen, so a tolerance in points would coalesce
+    /// on the laptop and not on the ultrawide, and the same drag would produce
+    /// two different files depending on which monitor you happened to use.
+    ///
+    /// What it is for: a hand-written file that says `0.3333` on one side of a
+    /// boundary and `1/3` on the other has a hairline crack in it, and dragging
+    /// that boundary should close the crack rather than carry it along.
+    static let coalescence = 0.005
+
+    /// The outermost hundredth of the screen is not a divider, it is the screen.
+    /// Dragging it would only pull the layout away from the edge, which is what
+    /// `margin` is for, and it would do it by accident every time somebody
+    /// aimed at the first zone.
+    private static let screenBoundary = 0.001
+
+    private struct Side {
+        let rid: Int
+        let coordinate: Double
+        let leading: Bool
+        let from: Double
+        let to: Double
+    }
+
+    private func sides(along axis: Cut) -> [Side] {
+        zones.flatMap { zone -> [Side] in
+            let start = axis == .vertical ? zone.x : zone.y
+            let extent = axis == .vertical ? zone.width : zone.height
+            let from = axis == .vertical ? zone.y : zone.x
+            let to = from + (axis == .vertical ? zone.height : zone.width)
+            return [Side(rid: zone.rid, coordinate: start, leading: true, from: from, to: to),
+                    Side(rid: zone.rid, coordinate: start + extent, leading: false, from: from, to: to)]
+        }
+    }
+
+    /// The line you would be grabbing at this point, with everything collinear
+    /// gathered into it.
+    ///
+    /// - Parameters:
+    ///   - coordinate: where the cursor is across the line.
+    ///   - across: where the cursor is *along* it. This is what tells one
+    ///     segment from another when a coordinate carries several — a vertical
+    ///     line broken in the middle by a full-width zone is two dividers, and
+    ///     moving one must not move the other.
+    ///
+    /// The group grows from the side under the cursor by extents that overlap
+    /// **or touch**, transitively. Touching matters: two zones stacked one above
+    /// the other meet exactly, share no interior, and are plainly one line to
+    /// anybody looking at the screen.
+    func edge(along axis: Cut, near coordinate: Double, across: Double,
+              tolerance: Double = EditorDocument.coalescence) -> EditorEdge? {
+        let candidates = sides(along: axis).filter {
+            $0.coordinate > Self.screenBoundary && $0.coordinate < 1 - Self.screenBoundary
+                && abs($0.coordinate - coordinate) <= tolerance
+        }
+        guard let seed = candidates
+            .filter({ $0.from <= across && across <= $0.to })
+            .min(by: { abs($0.coordinate - coordinate) < abs($1.coordinate - coordinate) })
+        else { return nil }
+
+        var group = [seed]
+        var grew = true
+        while grew {
+            grew = false
+            for side in candidates
+            where !group.contains(where: { $0.rid == side.rid && $0.leading == side.leading }) {
+                guard group.contains(where: { max($0.from, side.from) <= min($0.to, side.to) })
+                else { continue }
+                group.append(side)
+                grew = true
+            }
+        }
+        return Self.gather(group, axis: axis, at: seed.coordinate)
+    }
+
+    /// One zone's own side, for when ⌥ has broken the coalescence.
+    ///
+    /// This is how a gap or an overlap is made **on purpose**, which the editor
+    /// has to be able to do or it would be less expressive than the file — and
+    /// `zone(under:in:)` implements smallest-wins precisely so that overlapping
+    /// zones work.
+    func side(of rid: Int, along axis: Cut, nearest coordinate: Double) -> EditorEdge? {
+        let mine = sides(along: axis).filter { $0.rid == rid }
+        guard let closest = mine
+            .min(by: { abs($0.coordinate - coordinate) < abs($1.coordinate - coordinate) })
+        else { return nil }
+        return Self.gather([closest], axis: axis, at: closest.coordinate)
+    }
+
+    private static func gather(_ group: [Side], axis: Cut, at coordinate: Double) -> EditorEdge {
+        EditorEdge(axis: axis,
+                   // The seed's coordinate, not the average of the group: it is
+                   // the line you pointed at, and moving it somewhere you did
+                   // not point before you have dragged anything would be the
+                   // editor taking the first step for you.
+                   coordinate: coordinate,
+                   leading: group.filter(\.leading).map(\.rid),
+                   trailing: group.filter { !$0.leading }.map(\.rid),
+                   from: group.map(\.from).min() ?? 0,
+                   to: group.map(\.to).max() ?? 1)
+    }
+
+    /// Moves a line, and everything that was on it, to a new coordinate.
+    ///
+    /// Clamped so that nothing on either side ends up under `minimum`. Clamping
+    /// is right here and refusing was right for the split, and the difference is
+    /// that a drag is continuous: you are already holding the line, and having
+    /// it stop against a limit is how a limit should feel. A split is one
+    /// discrete act, and moving it somewhere you did not click would be the
+    /// editor answering a different question.
+    ///
+    /// One undo step per call, so the gesture has to call it **once, on the way
+    /// up** — the preview during the drag runs against a copy.
+    @discardableResult
+    mutating func move(_ edge: EditorEdge, to target: Double, minimum: Double) -> Bool {
+        var lowest = 0.0
+        var highest = 1.0
+        for rid in edge.trailing {
+            guard let zone = zones.first(where: { $0.rid == rid }) else { continue }
+            lowest = max(lowest, (edge.axis == .vertical ? zone.x : zone.y) + minimum)
+        }
+        for rid in edge.leading {
+            guard let zone = zones.first(where: { $0.rid == rid }) else { continue }
+            let far = edge.axis == .vertical ? zone.x + zone.width : zone.y + zone.height
+            highest = min(highest, far - minimum)
+        }
+        guard lowest <= highest else { return false }
+        let coordinate = min(max(target, lowest), highest)
+
+        var moved = zones
+        for index in moved.indices {
+            let rid = moved[index].rid
+            if edge.leading.contains(rid) {
+                // The origin moves and the far side stays where it was, so the
+                // size takes the difference.
+                if edge.axis == .vertical {
+                    moved[index].width = moved[index].x + moved[index].width - coordinate
+                    moved[index].x = coordinate
+                } else {
+                    moved[index].height = moved[index].y + moved[index].height - coordinate
+                    moved[index].y = coordinate
+                }
+            }
+            if edge.trailing.contains(rid) {
+                if edge.axis == .vertical {
+                    moved[index].width = coordinate - moved[index].x
+                } else {
+                    moved[index].height = coordinate - moved[index].y
+                }
+            }
+        }
+
+        // A drag that ends where it started is not an undo step. Without this,
+        // grabbing a divider and letting go costs you a ⌘Z that undoes nothing.
+        guard moved != zones else { return false }
+        history.append(zones)
+        zones = moved
+        return true
     }
 
     // MARK: - Undo
