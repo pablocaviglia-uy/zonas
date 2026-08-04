@@ -119,8 +119,21 @@ final class ZoneStore {
         try LayoutFile.write(encoder.encode(layout), to: url)
     }
 
+    /// Re-reads the file. If it cannot be read, **what is in memory stays**.
+    ///
+    /// It used to fall back to the built-in layout, which meant one comma too
+    /// many replaced the zones you were using with three columns you never
+    /// asked for. That punishes a typo by throwing away the last thing that
+    /// worked, at the exact moment you are editing the file and least want a
+    /// surprise. The built-in layout is what you get when there is nothing at
+    /// all — it is not a recovery mode.
+    ///
+    /// The last good layout being the fallback is also what lets the editor
+    /// have an `invalid` state later: something coherent is still on screen
+    /// while the file is broken.
     func reload() {
-        layout = ZoneStore.read(url) ?? .threeColumns
+        guard let fresh = ZoneStore.read(url) else { return }
+        layout = fresh
     }
 
     /// The zone under a point, in CG coordinates.
