@@ -15,7 +15,15 @@ import Foundation
 /// with noise without adding any information.
 enum Log {
 
-    static let url: URL = {
+    /// Where the log goes.
+    ///
+    /// It is a `var` for exactly one reason: the test suite points it at a
+    /// scratch file before it runs. This is the file you open when something is
+    /// actually wrong, and a test run leaving a dozen
+    /// `layout: FAILED to read /var/folders/…/zonas-tests-…` lines in the middle
+    /// of it costs the next person a double take at the worst possible moment.
+    /// Nothing in the app ever assigns it.
+    static var url: URL = {
         let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Logs/Zonas.log")
     }()

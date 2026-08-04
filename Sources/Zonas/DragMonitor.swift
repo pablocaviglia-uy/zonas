@@ -171,6 +171,12 @@ final class DragMonitor {
             overlay.show(layout, cursor: current, on: screen)
             isOverlayVisible = true
         } else if isOverlayVisible {
+            // Letting go of the modifier before the mouse button cancels the
+            // snap, on purpose — it is how you back out of a drag you did not
+            // mean to make. It used to do it without a word, so from the log a
+            // cancelled drag and a broken drop looked exactly the same: an
+            // overlay that appeared and no drop after it.
+            Log.write("overlay: hidden, the modifier was released — nothing will snap")
             overlay.hide()
             isOverlayVisible = false
         }
@@ -197,7 +203,14 @@ final class DragMonitor {
             return
         }
         // The same layout that was drawn, not whatever is in the store now.
-        guard let layout = snapshot else { return }
+        guard let layout = snapshot else {
+            // Unreachable: the snapshot is taken before the overlay can appear,
+            // and the overlay being up is what got us past the guard above. It
+            // logs anyway, because a silent `return` in the drop path is the
+            // kind of thing that costs an afternoon the day it does happen.
+            Log.write("drop: the overlay was up with no layout behind it")
+            return
+        }
         guard let screen = NSScreen.containing(cgPoint: event.location) else {
             Log.write("drop: the cursor didn't land on any screen")
             return

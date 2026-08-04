@@ -77,8 +77,19 @@ struct LayoutFileTests {
     }
 }
 
+/// Sends the log somewhere harmless, once, before any test can write to it.
+///
+/// A global `let` is initialized lazily and exactly once, and every test that
+/// can reach `Log.write` gets there through `inTemporaryDirectory` — so by the
+/// time anything logs, this has already run.
+private let logGoesToAScratchFile: Void = {
+    Log.url = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        .appendingPathComponent("zonas-tests.log")
+}()
+
 /// Runs `body` against a directory of its own and takes it away afterwards.
 func inTemporaryDirectory(_ body: (URL) throws -> Void) throws {
+    _ = logGoesToAScratchFile
     let dir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         .appendingPathComponent("zonas-tests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
