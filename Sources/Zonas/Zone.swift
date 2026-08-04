@@ -24,13 +24,47 @@ struct Zone: Codable, Equatable {
     var width: Double
     var height: Double
 
-    /// Translates the zone into a concrete rectangle inside a screen area.
+    /// The zone's share of the screen: the rectangle it owns.
+    ///
+    /// This is the **hit region**, and it is deliberately not the rectangle the
+    /// window gets. Zones written to tile a screen tile it edge to edge here, so
+    /// there is no band anywhere you can drop a window into and be told nothing
+    /// was there.
     func rect(in area: CGRect) -> CGRect {
         CGRect(x: area.origin.x + area.width * x,
                y: area.origin.y + area.height * y,
                width: area.width * width,
                height: area.height * height)
     }
+
+    /// The rectangle the window is actually given: the zone, minus the gap.
+    ///
+    /// **The preview draws this and the drop sets this**, which is the entire
+    /// reason it exists. The overlay used to inset by 8 inside its own drawing
+    /// code while the snap used the full rectangle, so the shape you were shown
+    /// was a shape no window was ever going to be given. A preview that lies is
+    /// worse than no preview: you learn to distrust it and then it is only in
+    /// the way.
+    func frame(in area: CGRect, gap: CGFloat = Zone.gap) -> CGRect {
+        let full = rect(in: area)
+        // insetBy hands back CGRect.null when the inset eats the rectangle, and
+        // CGRect.null's origin is infinity — which would go straight to the
+        // Accessibility API. A zone thinner than the gap is a broken file, not a
+        // layout, and leaving it alone says so more usefully than a window at
+        // infinity would.
+        guard full.width > gap, full.height > gap else { return full }
+        return full.insetBy(dx: gap / 2, dy: gap / 2)
+    }
+
+    /// Space between two neighbouring windows, in points.
+    ///
+    /// Each of the two gives up half, so this is the number you actually see
+    /// between them — and half of it is what is left against the screen edge,
+    /// until `defaults.margin` exists to say otherwise.
+    ///
+    /// Hardcoded for now, and that is fine; what was not fine was having it
+    /// written down in two places that disagreed.
+    static let gap: CGFloat = 8
 }
 
 /// A set of zones that are used together.

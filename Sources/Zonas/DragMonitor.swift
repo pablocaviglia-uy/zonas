@@ -182,15 +182,20 @@ final class DragMonitor {
             Log.write("drop: there was a zone but no window to move")
             return
         }
-        guard let screen = NSScreen.containing(cgPoint: event.location),
-              let target = ZoneStore.shared.zone(under: event.location,
-                                                 in: screen.cgVisibleFrame)
-        else {
+        guard let screen = NSScreen.containing(cgPoint: event.location) else {
+            Log.write("drop: the cursor didn't land on any screen")
+            return
+        }
+        let area = screen.cgVisibleFrame
+        guard let target = ZoneStore.shared.zone(under: event.location, in: area) else {
             Log.write("drop: the cursor didn't land inside any zone")
             return
         }
 
-        Log.write("drop: snapping into \"\(target.zone.name)\" \(target.rect)")
-        window.setFrame(target.rect)
+        // The same call the overlay drew a moment ago, which is the point: the
+        // window lands exactly on the rectangle that was highlighted.
+        let frame = target.zone.frame(in: area)
+        Log.write("drop: snapping into \"\(target.zone.name)\" \(frame)")
+        window.setFrame(frame)
     }
 }

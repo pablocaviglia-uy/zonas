@@ -26,10 +26,14 @@ final class OverlayController {
 
         // Zones are computed in CG and then converted to view coordinates, which
         // are the window's: origin bottom-left and relative to its own frame.
+        //
+        // What gets drawn is `frame`, not `rect`: the frame is the rectangle the
+        // window is going to be given, and the preview showing anything else is
+        // the preview lying.
         let windowFrame = window.frame
         view.zones = ZoneStore.shared.layout.zones.map { zone in
             let rectCG = zone.rect(in: area)
-            let rectCocoa = Coords.cgToCocoa(rectCG)
+            let rectCocoa = Coords.cgToCocoa(zone.frame(in: area))
             return ZoneOverlayView.Box(
                 rect: rectCocoa.offsetBy(dx: -windowFrame.origin.x, dy: -windowFrame.origin.y),
                 name: zone.name,
@@ -87,7 +91,10 @@ final class ZoneOverlayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         for box in zones {
-            let frame = box.rect.insetBy(dx: 8, dy: 8)
+            // No inset here. The gap belongs to the zone —`Zone.frame(in:)`—
+            // because the snap has to apply the very same one, and a number
+            // that lives in the drawing code is a number the snap cannot see.
+            let frame = box.rect
             let path = NSBezierPath(roundedRect: frame, xRadius: 14, yRadius: 14)
 
             if box.isActive {
