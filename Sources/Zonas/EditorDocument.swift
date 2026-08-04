@@ -394,6 +394,146 @@ struct EditorDocument: Equatable {
         return true
     }
 
+    // MARK: - Snapping
+
+    /// Where a coordinate wants to land.
+    ///
+    /// §5's order, and each tier is answering a different question. **Other
+    /// zones' edges first**, because lining up with something already on the
+    /// screen is the thing you are almost always trying to do and no fraction
+    /// can substitute for it — a zone that lines up with its neighbour above is
+    /// right whether or not the number is pretty. **Then the rational lines**,
+    /// which is where `1/3` comes from instead of `0.3333333333333333`. **Then
+    /// the screen's own edges**, last because they are 320 points from the
+    /// nearest sixteenth and the ordering never actually comes up; it is written
+    /// down so that the day it does, it does the same thing twice.
+    ///
+    /// `ignoring` is the zones being moved. Their own edges are the ones
+    /// travelling, and a line that snapped to where it already was would be
+    /// impossible to move at all.
+    ///
+    /// `range` is where the answer is allowed to be. Without it the grid can
+    /// pull a cut into the band where it would be refused, and the result is a
+    /// stripe of screen where hovering shows nothing and no reason is given.
+    func snap(_ coordinate: Double, along axis: Cut, ignoring rids: Set<Int>,
+              within radius: Double, to range: ClosedRange<Double> = 0...1) -> Double {
+        guard radius > 0 else { return coordinate }
+
+        let neighbours = sides(along: axis)
+            .filter { !rids.contains($0.rid) }
+            .map(\.coordinate)
+
+        for tier in [neighbours, Fraction.lines, [0, 1]] {
+            let hit = tier
+                .filter { range.contains($0) && abs($0 - coordinate) <= radius }
+                .min { abs($0 - coordinate) < abs($1 - coordinate) }
+            if let hit { return hit }
+        }
+        return coordinate
+    }
+
+    // MARK: - Deleting
+
+    /// Removes a zone and hands its area to a neighbour.
+    ///
+    /// §5 says "the neighbour sharing the longest edge", and **that rule on its
+    /// own does not work**, which writing the test found. Lengths here are
+    /// fractions, so it compares a fraction of the screen's height against a
+    /// fraction of its width — two numbers that are only comparable once you
+    /// know the aspect ratio. Supplying one does not rescue it either: deleting
+    /// the top-left zone of this desk's layout gives 1280 points of shared edge
+    /// against 720 on the ultrawide, and 432 against 542 on the laptop. The same
+    /// delete would absorb into a different neighbour depending on which monitor
+    /// you happened to be looking at, for one layout that is drawn on both.
+    ///
+    /// So the first question is not how long the shared edge is but **whether
+    /// the neighbour lines up with the victim along it**. One that does can take
+    /// the area exactly: no hole, no overlap, and it is the zone a person would
+    /// point at — the one in the same column or the same row. That test is a
+    /// comparison of like with like, so it gives the same answer on every
+    /// screen. Longest shared edge is kept as the tie-break, and the file's own
+    /// order breaks the tie after that, so the result is always reproducible.
+    ///
+    /// It can still leave a hole, when no neighbour lines up. That is allowed
+    /// rather than prevented, because zones are not required to tile and a hole
+    /// is visible the instant it appears — dimmed desktop with no outline — and
+    /// you close it by dragging. Refusing the delete instead would let the
+    /// editor into states it could not get out of.
+    @discardableResult
+    mutating func delete(rid: Int) -> Bool {
+        // The last zone is not deletable. An empty layout is a layout where the
+        // modifier does nothing, with no way back except the file.
+        guard zones.count > 1, let index = index(of: rid) else { return false }
+        let victim = zones[index]
+
+        var best: (index: Int, alignsExactly: Bool, shared: Double)?
+        for (other, zone) in zones.enumerated() where other != index {
+            guard let edge = Self.boundary(between: victim, and: zone) else { continue }
+            let better = best.map {
+                (edge.alignsExactly && !$0.alignsExactly)
+                    || (edge.alignsExactly == $0.alignsExactly && edge.shared > $0.shared)
+            } ?? true
+            if better { best = (other, edge.alignsExactly, edge.shared) }
+        }
+
+        history.append(zones)
+        if let best {
+            zones[best.index] = Self.absorb(victim, into: zones[best.index])
+        }
+        zones.remove(at: index)
+        return true
+    }
+
+    /// The boundary two zones share: how much of it there is, and whether the
+    /// other zone lines up with this one along it exactly.
+    private static func boundary(between victim: EditZone, and other: EditZone)
+        -> (shared: Double, alignsExactly: Bool)? {
+        let close = Fraction.tolerance
+
+        // Meeting on a vertical line: they share an x, and the boundary runs in y.
+        if abs(victim.x + victim.width - other.x) < close
+            || abs(other.x + other.width - victim.x) < close {
+            let overlap = min(victim.y + victim.height, other.y + other.height)
+                - max(victim.y, other.y)
+            if overlap > close {
+                return (overlap, abs(other.y - victim.y) < close
+                                 && abs(other.height - victim.height) < close)
+            }
+        }
+        // Meeting on a horizontal line: they share a y, and it runs in x.
+        if abs(victim.y + victim.height - other.y) < close
+            || abs(other.y + other.height - victim.y) < close {
+            let overlap = min(victim.x + victim.width, other.x + other.width)
+                - max(victim.x, other.x)
+            if overlap > close {
+                return (overlap, abs(other.x - victim.x) < close
+                                 && abs(other.width - victim.width) < close)
+            }
+        }
+        return nil
+    }
+
+    /// Grows `heir` over `victim`, but only along the axis they meet on.
+    ///
+    /// Growing both ways would be the greedier answer and it is wrong: it would
+    /// swallow whatever else was beside the victim, so deleting one zone would
+    /// silently cover two.
+    private static func absorb(_ victim: EditZone, into heir: EditZone) -> EditZone {
+        var heir = heir
+        if abs(heir.x + heir.width - victim.x) < Fraction.tolerance {
+            heir.width += victim.width                       // victim is to its right
+        } else if abs(victim.x + victim.width - heir.x) < Fraction.tolerance {
+            heir.x = victim.x                                // victim is to its left
+            heir.width += victim.width
+        } else if abs(heir.y + heir.height - victim.y) < Fraction.tolerance {
+            heir.height += victim.height                     // victim is below it
+        } else if abs(victim.y + victim.height - heir.y) < Fraction.tolerance {
+            heir.y = victim.y                                // victim is above it
+            heir.height += victim.height
+        }
+        return heir
+    }
+
     // MARK: - Undo
 
     /// Undo is a stack of whole-document snapshots.
