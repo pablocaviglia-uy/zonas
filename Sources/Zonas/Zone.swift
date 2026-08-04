@@ -149,6 +149,22 @@ struct Layout: Equatable {
         zone.frame(in: area, gap: gap, margin: margin)
     }
 
+    /// The same rectangles, in the coordinates of a view that covers exactly
+    /// `area` — which is what both the drag overlay and the editor are.
+    ///
+    /// It exists as one function because there are two callers and the mistake
+    /// they would make separately is the same one, twice: drawing `rect` — the
+    /// hit region, which tiles — instead of `frame`, the rectangle a window is
+    /// actually given. That is §3e, and both places it could come back are
+    /// places where nobody would notice, because a preview drawn 4 points too
+    /// large on each side looks like a preview.
+    ///
+    /// The result is index-parallel with `zones`, so a caller that needs the
+    /// names or the active one indexes both.
+    func viewFrames(in area: CGRect) -> [CGRect] {
+        zones.map { Coords.cgToView(frame(of: $0, in: area), filling: area) }
+    }
+
     /// Three columns 25 / 50 / 25: the middle one for the window being worked
     /// on and the side ones for whatever is being consulted. It is the layout
     /// that pays off the most on a wide monitor, and it serves as a starting

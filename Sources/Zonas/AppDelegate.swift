@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var permissionWatchdog: Timer?
     private var layoutWatcher: LayoutWatcher?
     private let monitor = DragMonitor()
+    private let editor = EditorController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // No Dock icon and no app menu: this lives in the menu bar, like Raycast
@@ -22,8 +23,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         LayoutStore.shared.createIfMissing()
 
         buildMenu()
+        wireTheEditor()
         startMonitor()
         startWatchingTheLayout()
+    }
+
+    /// The one rule that neither the editor nor the drag monitor can hold on its
+    /// own: **they cannot both be listening.**
+    ///
+    /// With the tap live, holding the modifier inside the editor summons the
+    /// drag overlay, which draws the same zones at `.popUpMenu` over the ones
+    /// you are editing at `.floating` — and since the editor's own gestures use
+    /// modifiers too, that is not an edge case, it is every other click.
+    ///
+    /// It lives here because it is a fact about the app rather than about either
+    /// component, and because this is the file where you would come looking for
+    /// it. Neither of them refers to the other.
+    private func wireTheEditor() {
+        editor.onVisibilityChange = { [weak self] isOpen in
+            self?.monitor.setEnabled(!isOpen)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -55,6 +74,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 break
             }
             self?.showProblem(LayoutStore.shared.problem)
+            // The editor draws whatever the store holds, so a save made from
+            // vim on the other screen moves the zones underneath it. Without
+            // this the editor would keep showing the layout it opened with,
+            // which is the one thing this app has spent a stage promising not
+            // to do.
+            self?.editor.refresh()
         }
         watcher.start()
         layoutWatcher = watcher
@@ -160,7 +185,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(problem)
 
         menu.addItem(.separator())
-        menu.addItem(ownItem("Edit Zones…", #selector(openLayout)))
+        menu.addItem(ownItem("Edit Zones…", #selector(openEditor)))
+        // This used to be the item called "Edit Zones…", and the rename is the
+        // point: with a visual editor in the menu next to it, an item that opens
+        // a text file has to say so or half the people who click it get a
+        // surprise and the other half never find the file.
+        menu.addItem(ownItem("Edit the File…", #selector(openLayout)))
         menu.addItem(ownItem("Reload Zones", #selector(reloadLayout), key: "r"))
         menu.addItem(ownItem("Open Log…", #selector(openLog)))
         menu.addItem(.separator())
@@ -194,6 +224,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     @objc private func openLayout() {
         NSWorkspace.shared.open(LayoutStore.shared.fileURL)
+    }
+
+    @objc private func openEditor() {
+        editor.open()
     }
 
     /// Here an alert **is** right, and the difference is who asked.

@@ -30,6 +30,16 @@ final class DragMonitor {
     private var isDragging = false
     private var isOverlayVisible = false
 
+    /// Whether somebody asked for the tap to be quiet — see `setEnabled`.
+    ///
+    /// It has to be remembered rather than read back off the port, because the
+    /// system disables the tap on its own too and the two are indistinguishable
+    /// from the outside. Without it the recovery path below cheerfully undoes
+    /// the suspension: measured on this machine, disabling the tap while the
+    /// editor opened was followed 48 ms later by a `tapDisabledByUserInput`,
+    /// and the handler for that turned the tap straight back on.
+    private var isSuspended = false
+
     /// The layout this drag is working against, frozen when the drag begins.
     ///
     /// A gesture lasts seconds; saving the file takes none. Asking the store
@@ -86,7 +96,16 @@ final class DragMonitor {
 
         self.tap = tap
         self.runLoopSource = runLoopSource
-        Log.write("tap: active, listening to the mouse")
+
+        // A tap comes up listening, and a suspension has to survive one being
+        // built underneath it. The editor does not need the Accessibility
+        // permission to draw, so it can perfectly well be open when the
+        // permission watchdog finally gets one — and a tap that came alive
+        // inside an open editor is the exact fight `setEnabled` exists to
+        // prevent, arriving by the one door that does not go through it.
+        if isSuspended { CGEvent.tapEnable(tap: tap, enable: false) }
+
+        Log.write("tap: active, \(isSuspended ? "but suspended" : "listening to the mouse")")
         return true
     }
 
@@ -98,6 +117,66 @@ final class DragMonitor {
         tap = nil
         runLoopSource = nil
         overlay.hide()
+    }
+
+    /// Stops and resumes delivery **without taking the tap down**.
+    ///
+    /// The editor is what needs this. With the tap listening, holding the
+    /// modifier inside the editor summons the drag overlay, which then draws the
+    /// same zones a hundred levels above the ones you are editing — two pictures
+    /// of the same layout fighting over the screen.
+    ///
+    /// Deliberately not `stop()` followed by `start()`. Creating the tap is the
+    /// call that fails when the permission is missing, and it returns `nil` with
+    /// no detail; rebuilding it on the way back would hand the editor a way to
+    /// leave the app permanently deaf, with the watchdog long since retired and
+    /// nothing left to retry it. Disabling a port that already exists cannot
+    /// fail, and it is the same call the timeout path already makes.
+    func setEnabled(_ enabled: Bool) {
+        guard let tap else { return }   // no permission: there is nothing to quieten
+        isSuspended = !enabled
+        CGEvent.tapEnable(tap: tap, enable: enabled)
+        if !enabled { forgetTheDrag() }
+
+        // The port is asked what it thinks, rather than the log repeating what
+        // it was told. That is not decoration: what this line was meant to
+        // report and what was actually true were different for the first
+        // version of this method, and only a line that reads the state back
+        // could have said so.
+        Log.write("tap: \(enabled ? "resumed" : "suspended") — "
+                  + (CGEvent.tapIsEnabled(tap: tap) ? "listening" : "deaf"))
+    }
+
+    /// The system took the tap away. Whether to take it back.
+    ///
+    /// A tap that is off and not turned back on makes the app permanently deaf
+    /// with no error anywhere, so the reflex is to re-enable unconditionally —
+    /// which is what this used to do, and which quietly cancels a suspension
+    /// that is still in force. The distinction the reflex was missing is that
+    /// only one of the two disablings was somebody's decision.
+    private func revive(_ reason: String) {
+        guard !isSuspended else {
+            Log.write("tap: disabled by \(reason) while suspended — leaving it off")
+            return
+        }
+        Log.write("tap: disabled by \(reason) — re-enabling")
+        if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+    }
+
+    /// Back to knowing nothing about any gesture.
+    ///
+    /// Suspending has to do this as well as dropping does. A drag cannot really
+    /// be in progress when the editor opens — the click that opened the menu
+    /// ended it — but leaving `isDragging` set means the first event after the
+    /// resume is read as the middle of a gesture that began before the editor
+    /// existed, against a window that was identified for it.
+    private func forgetTheDrag() {
+        overlay.hide()
+        isOverlayVisible = false
+        isDragging = false
+        startPoint = nil
+        draggedWindow = nil
+        snapshot = nil
     }
 
     // MARK: - Events
@@ -125,12 +204,10 @@ final class DragMonitor {
         // only evidence that would tell whether this should someday move off
         // the main thread. It used to re-enable silently, leaving no trace.
         case .tapDisabledByTimeout:
-            Log.write("tap: disabled by TIMEOUT — re-enabling")
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            revive("TIMEOUT")
 
         case .tapDisabledByUserInput:
-            Log.write("tap: disabled by user input — re-enabling")
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            revive("user input")
 
         default:
             break
@@ -183,14 +260,7 @@ final class DragMonitor {
     }
 
     private func handleDrop(_ event: CGEvent) {
-        defer {
-            overlay.hide()
-            isOverlayVisible = false
-            isDragging = false
-            startPoint = nil
-            draggedWindow = nil
-            snapshot = nil
-        }
+        defer { forgetTheDrag() }
 
         guard isOverlayVisible else { return }
 
