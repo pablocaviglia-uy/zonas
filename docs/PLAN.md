@@ -443,7 +443,7 @@ it rewrites on every launch.
 > | Stretch | What it is | |
 > |---|---|---|
 > | 1 | The window: one per screen, dimmed desktop, zones drawn, **no editing** | **done** |
-> | 2 | Click to split, ⇧ rotates the axis, hover preview | |
+> | 2 | Click to split, ⇧ rotates the axis, hover preview, ⌘Z | **done** |
 > | 3 | Edge dragging with collinear coalescence, ⌥ to break it | |
 > | 4 | Rational snapping, px+fraction labels, delete | |
 > | 5 | The write path through `LayoutSyntax`, undo, conflict banner | |
@@ -531,6 +531,47 @@ pool, which means it happens on somebody else's machine and not on this one.
 Showing the Dock is the cheap way to exercise display reconfiguration without
 unplugging anything: it fires `didChangeScreenParametersNotification` and takes
 the ultrawide's `visibleFrame` from 5120 × 1410 to 5120 × 1320.
+
+### What stretch 2 established
+
+The gesture works as designed, including the part that sounded like a flourish:
+the default axis really does turn itself round, watched live — two clicks at the
+same cursor position cut a zone horizontally and then cut the piece below it
+vertically, because by the second click that piece was wider than it was tall.
+
+**The preview is the whole layout, not a line over the current one.** The
+candidate goes through the same `split` and the same `viewFrames` as the real
+thing, so the two pieces are named and measured where they will be. This is only
+affordable because `EditorDocument` is a value type: the view builds a candidate
+per mouse move and cannot promote it by accident. Sweeping the cursor across
+5120 points at 120 Hz costs 12% of one core, so the redraw-per-move stays.
+
+**`acceptsFirstMouse` has to be true.** A click on an unfocused window normally
+only focuses it, and AppKit swallows it — so leaving the editor and coming back
+made the first click do nothing. That default is right almost everywhere and
+wrong here, because the cut line follows the cursor while the window is
+unfocused (`.activeAlways` tracking): the user can see what the click will do,
+so swallowing it prevents no surprise and creates a did-that-work?.
+
+**Splitting made the conflict banner necessary, three stretches before the
+write path.** Following the file was free while the editor held nothing of its
+own. Now an untouched editor follows it and an edited one stops and says so.
+The part that is easy to get wrong: undoing back to the start makes the document
+untouched again, and *that* has to re-read the file on the spot rather than at
+the next save — otherwise the warning clears while the stale version is still on
+screen, which is the lie the warning existed to prevent.
+
+**A modifier does not arrive as a `keyDown`.** ⇧ rotating the cut with the mouse
+standing still needs `flagsChanged`, forwarded from the window because the window
+is the responder certain to see a key event whatever holds focus. Worth knowing
+for testing too: posting a synthetic keyDown for the shift key proves nothing,
+the posted event has to be of type `.flagsChanged`.
+
+Refusing a cut that would leave a sliver beats clamping one, because clamping
+puts a zone where you did not click. The threshold is about aim rather than
+about useful window sizes — comfortably more than the eight points the drag
+threshold already calls a steady hand — and it explains itself by the cut line
+simply not being drawn inside the band.
 
 Estimate: 400–600 lines of AppKit on a base that already knows half of it.
 
