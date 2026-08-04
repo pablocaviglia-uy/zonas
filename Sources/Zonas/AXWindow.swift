@@ -50,13 +50,45 @@ struct AXWindow {
     /// gets positioned, resized, and positioned again: the second pass absorbs
     /// that rearrangement.
     ///
-    /// Not checking the result is deliberate for now: some apps enforce a
-    /// minimum size and report success having applied something else. Detecting
-    /// that properly is a separate job.
-    func setFrame(_ rect: CGRect) {
+    /// **The result is read back, and a difference goes in the log.** Nothing is
+    /// retried and nothing is corrected — an app that enforces a minimum size is
+    /// going to win, and honouring per-app minimums is a job of its own. What
+    /// this buys is that the failure stops being invisible: `setSize` returns
+    /// success having applied something else entirely, so until now "Xcode
+    /// ignores the width" was something you could only find out by measuring the
+    /// window by hand and comparing. Measured on this machine: asked for 424
+    /// wide, Xcode applied 600 and said yes.
+    @discardableResult
+    func setFrame(_ rect: CGRect) -> CGRect? {
         element.setPosition(rect.origin)
         element.setSize(rect.size)
         element.setPosition(rect.origin)
+
+        guard let applied = frame else { return nil }
+        guard AXWindow.differs(asked: rect, applied: applied) else { return applied }
+
+        let floored = applied.width > rect.width || applied.height > rect.height
+        Log.write("window: asked for \(AXWindow.describe(rect))"
+                  + " — the app applied \(AXWindow.describe(applied))"
+                  + (floored ? " and will not go below that" : ""))
+        return applied
+    }
+
+    /// Whether what the app applied is far enough from what was asked to be
+    /// worth a line in the log.
+    ///
+    /// The slack is there because plenty of apps round to whole points, and
+    /// half a point of difference is not something anybody needs told about at
+    /// the end of every single drag.
+    static func differs(asked: CGRect, applied: CGRect, slack: CGFloat = 1) -> Bool {
+        abs(applied.origin.x - asked.origin.x) > slack
+            || abs(applied.origin.y - asked.origin.y) > slack
+            || abs(applied.width - asked.width) > slack
+            || abs(applied.height - asked.height) > slack
+    }
+
+    private static func describe(_ rect: CGRect) -> String {
+        "\(Int(rect.width))×\(Int(rect.height)) at (\(Int(rect.minX)), \(Int(rect.minY)))"
     }
 }
 
