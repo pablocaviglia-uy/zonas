@@ -444,7 +444,7 @@ it rewrites on every launch.
 > |---|---|---|
 > | 1 | The window: one per screen, dimmed desktop, zones drawn, **no editing** | **done** |
 > | 2 | Click to split, ⇧ rotates the axis, hover preview, ⌘Z | **done** |
-> | 3 | Edge dragging with collinear coalescence, ⌥ to break it | |
+> | 3 | Edge dragging with collinear coalescence, ⌥ to break it | **done** |
 > | 4 | Rational snapping, px+fraction labels, delete | |
 > | 5 | The write path through `LayoutSyntax`, undo, conflict banner | |
 >
@@ -572,6 +572,38 @@ puts a zone where you did not click. The threshold is about aim rather than
 about useful window sizes — comfortably more than the eight points the drag
 threshold already calls a steady hand — and it explains itself by the cut line
 simply not being drawn inside the band.
+
+### What stretch 3 established
+
+**The AppKit argument is real and was measured.** A divider on the laptop was
+grabbed, the cursor taken two thousand points onto the ultrawide — right out of
+the window that owned the gesture — brought back and released, and the line
+ended where the mouse came up. That is the case SwiftUI's `DragGesture` drops
+without calling `onEnded`. If anyone ever proposes porting this view, that is
+the experiment to run first.
+
+**The sliver band and the grab radius are the same number, and should be.** A
+click within forty points of a boundary cannot mean "split" — it would leave a
+sliver — and it obviously means "move this line". Sharing the number means every
+point of the editor does something, and it costs nothing: a horizontal cut is
+decided by the cursor's *y* alone, so giving up the outer forty points of *x*
+gives up no cut you could not make forty points along.
+
+**Reach and tolerance are different numbers.** Reach is about aim and is tens of
+points; the coalescence tolerance is about what counts as one line and is a
+rounding error. On the ultrawide a comfortable reach is already wider than the
+tolerance, so one shared number would either make dividers unclickable or glue
+unrelated dividers together. They are separate parameters on
+`edge(along:near:across:within:tolerance:)` for that reason.
+
+**One undo step per gesture, not per event.** The document is only touched on
+the way up; the preview during the drag runs against a copy. Four drags, four
+⌘Z, back to the original pixel columns.
+
+⌥ is read live rather than at `mouseDown`, so it can be pressed half way through
+a drag and the line shrinks to one side under your hand. And the cursor turning
+into a resize arrow is the only thing that tells a divider you can hold from a
+cut you can make — both are otherwise an accent line under the pointer.
 
 Estimate: 400–600 lines of AppKit on a base that already knows half of it.
 
