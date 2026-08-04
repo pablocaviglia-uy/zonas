@@ -47,16 +47,22 @@ layout once and take it to every machine they own.
   ![Zonas snapping a window into a zone](docs/demo.gif)
 -->
 
-**There is no visual editor, and that is on purpose for now.** Everything you
-can express you express in the file, which means every layout you build is
-something you can read, diff, comment, and carry to another machine. An editor
-will come to widen the audience, not to make this usable: AeroSpace has 22,000
-stars and no configuration GUI at all.
+**The visual editor is a client of the file, not a second way to store your
+zones.** Drag a divider and the file changes — your comments where you left
+them, your formatting as you wrote it, and `"1/3"` where you dragged to a third.
+Close it and edit the same file in vim and it changes back. Neither one is the
+real copy, because there is only one copy.
 
-**Status: early.** The snapping works end to end and the file is the real
-source of truth — comments, ratios, live reload, errors that name the line. What
-is not there yet is multiple layouts, per-monitor rules, and the visual editor.
-See [Not there yet](#not-there-yet).
+That is the asymmetry the whole project is built around, and it goes one way on
+purpose: everything the editor does can be written by hand, and not everything
+you can write by hand has a button. Per-app rules, monitor globs and the rest
+stay in the file, which is what stops a preference pane from becoming a junk
+drawer.
+
+**Status: early.** The snapping works end to end, the file is the real source of
+truth — comments, ratios, live reload, errors that name the line — and the
+editor writes back into it. What is not there yet is multiple layouts and
+per-monitor rules. See [Not there yet](#not-there-yet).
 
 ## Install
 
@@ -133,7 +139,8 @@ is missing — has:
 | Item | |
 |---|---|
 | `Hold ⇧ while dragging a window` | Reminder, not a button |
-| `Edit Zones…` | Opens `zonas.json5` in your default editor |
+| `Edit Zones…` | The visual editor — see below |
+| `Edit the File…` | Opens `zonas.json5` in your default editor |
 | `Reload Zones` (⌘R) | Re-reads the file after you edit it |
 | `Open Log…` | Opens `~/Library/Logs/Zonas.log` |
 | `Launch at Login` | Only available from `/Applications` |
@@ -153,6 +160,47 @@ tail -f ~/Library/Logs/Zonas.log
 
 It records **state transitions**, not every event — a `mouseDragged` arrives
 dozens of times per second and would bury the file in noise.
+
+## The visual editor
+
+`Edit Zones…` dims the desktop and draws your zones over it at full size, one
+window per screen. Nothing is scaled: a zone that reads `1280 × 1410` in the
+editor is 1280 × 1410 points of that monitor, and the rectangle drawn is the
+rectangle a window dropped there would be given.
+
+| | |
+|---|---|
+| **Click a zone** | Cuts it in two at the cursor. The cut runs across the longer side, so a wide zone splits into columns and a tall one into rows |
+| **⇧** | Turns the cut ninety degrees |
+| **Drag a divider** | Moves every zone on that line at once, so a boundary cannot come apart |
+| **⌥** while dragging | Moves one side only, off the grid — how you make a deliberate gap or overlap |
+| **⌫**, or the **✕** | Deletes the zone under the cursor. The neighbour that lines up with it takes the space |
+| **⌘Z** | Undo |
+| **⎋**, or **Done** | Close |
+
+Every zone shows its size in points and, underneath, the same size as a
+fraction — **in colour when it is a fraction worth writing down and grey when
+it is not**. Dragging snaps to halves, thirds, quarters, fifths, sixths,
+eighths, tenths, twelfths and sixteenths, and to the edges of your other zones.
+Those are exactly the numbers the file can write, so what lands on screen is
+what goes in the file: `"1/3"`, not `0.3333333333333333`.
+
+**There is no Save.** The file is written as you go, your comments and your
+formatting kept, and only the numbers that actually moved are rewritten. The way
+back is ⌘Z, or **Revert**, which restores the file exactly as it was when the
+editor opened. A copy of it is also kept as `zonas.json5.bak` before the first
+change.
+
+If you edit the file in another program while the editor is open, the bar says
+so and stops saving until you pick **Keep Mine** or **Use the File** — and if
+the file does not parse at all, the editor shows the last layout that read
+cleanly and writes nothing, so a file you are halfway through typing is never
+overwritten.
+
+Everything the editor does can be written by hand. The reverse is not true, and
+that is on purpose: per-app rules, monitor globs and the rest belong to the
+file, and a preference pane that grew a button for each of them would be the
+junk drawer this project is trying not to become.
 
 ## The zones
 
@@ -274,8 +322,6 @@ behind most of the decisions in here — is written down in
       so.
 - [ ] Electron, Java and other apps that do not cooperate with the
       Accessibility API
-- [ ] `gap`, `margin` and the modifier key, set from the file
-- [ ] A visual editor — one that writes *this* file, comments and all
 - [ ] A Homebrew cask, so `brew install --cask zonas` works
 - [ ] Automatic updates. Today a new version means downloading the `.dmg` again
 

@@ -42,14 +42,19 @@ universal binary with `-u`.
 | `AXWindow.swift` | Reading and moving other apps' windows through the Accessibility API. |
 | `Coords.swift` | Converting between macOS's two screen coordinate systems. The number one source of bugs in this kind of app. Also `NSScreen.displayID`. |
 | `OverlayController.swift` | The translucent layer that draws the zones. |
-| `Zone.swift` | The model: `Zone`, `Layout`, and hit-testing. Nothing about files. |
+| `Zone.swift` | The model: `Zone`, `Layout`, hit-testing, and the two view-space conversions the overlay and the editor share. |
 | `LayoutFile.swift` | Where the file is, reading it, writing it, and the text of the one the first launch creates. |
-| `ZoneStore.swift` | The layout in memory, and which file it came from. |
+| `LayoutStore.swift` | The layout in memory, and which file it came from. |
+| `LayoutSyntax.swift` | JSON5 in, tree out, text back, comments intact. `LayoutParser`, `LayoutSchema` and `LayoutMigration` sit beside it. |
+| `LayoutWriter.swift` | An edited document back into the file it came from. The one place Rule 2 has an exception, and it is computed. |
+| `EditorController.swift` | The editor: windows, gestures, drawing, and when it must not write. |
+| `EditorDocument.swift` | What the editor edits — `rid` identity, split, move, delete, undo. Nothing about screens. |
+| `Fraction.swift` | The denominators the file can write, which are the ones the editor snaps to. |
 | `LaunchAtLogin.swift` | `SMAppService` registration. |
 | `Signature.swift` | Logs the live process's cdhash and designated requirement. |
 | `Log.swift` | File log at `~/Library/Logs/Zonas.log`. |
 | `AppDelegate.swift` | Menu bar, permissions, wiring. |
-| `Tests/ZonasTests/` | 25 tests. `swift test`, and CI runs it on every push. |
+| `Tests/ZonasTests/` | 198 tests. `swift test`, and CI runs it on every push. |
 
 ### The release pipeline, corrected
 
@@ -446,7 +451,14 @@ it rewrites on every launch.
 > | 2 | Click to split, ⇧ rotates the axis, hover preview, ⌘Z | **done** |
 > | 3 | Edge dragging with collinear coalescence, ⌥ to break it | **done** |
 > | 4 | Rational snapping, px+fraction labels, delete | **done** |
-> | 5 | The write path through `LayoutSyntax`, undo, conflict banner | |
+> | 5 | The write path through `LayoutSyntax`, undo, conflict banner | **done** |
+>
+> **All five have landed.** The narrow editor is complete: click a zone to cut
+> it, drag a divider to move everything collinear with it, ⌥ for one side and
+> off the grid, ⌫ or the ✕ to delete, ⌘Z, Revert, and the file written as you
+> go. What is deliberately *not* in it is §5's numeric panel, its templates and
+> its layout management — those belong to the wider editor, and the file is
+> where they live in the meantime.
 >
 > **Stretch 1 offering no editing was the point, not a shortfall.** Everything
 > difficult about an editor is in the window — the coordinate space, the levels,
@@ -647,6 +659,46 @@ A delete can leave a hole, and it is allowed rather than prevented. Zones are
 not required to tile, a hole is dimmed desktop with no outline and therefore
 visible the instant it appears, and you close it by dragging. Refusing the
 delete instead would let the editor into states it could not get out of.
+
+### What stretch 5 established
+
+**Rule 2 needs one exception for an editor, and exactly one.** A writer that
+never loses a comment cannot delete a zone; a writer that deletes zones cannot
+make `fmt`'s promise. The difference is the comments attached to the elements
+being removed, so `LayoutWriter.survivors` computes that list and everything not
+on it still has to survive. Anything else going missing refuses the write, with
+`fmt`'s message: this is a bug in Zonas, not in your file.
+
+**Breaking the writer found a bug older than the editor.** A comment attached to
+a key *inside* a zone was dropped by the renderer — an inlined row has nowhere
+to put one — so the conservation check fired and `zonas fmt` refused to write
+such a file at all. An array whose rows carry comments now renders block style.
+Annotating one zone costs the whole table its alignment, and that is the right
+way round: alignment is a convenience, the comment is somebody's sentence.
+
+**A value that has not changed is not rewritten.** The first version turned
+every number in the file into the writer's preferred spelling on the first drag
+— a zone nobody had touched went from `0.75` to `"3/4"`. `LayoutSyntax` promises
+`.25` stays `.25`, and restyling the untouched half of the file breaks that
+promise from the other end.
+
+**Four states where the editor must not write**, and they are most of the work:
+while the file does not parse (the store would hand over the last good layout,
+and saving it over a half-typed file destroys the thing being fixed); while a
+conflict is unanswered (writing answers it "keep mine" without anybody
+choosing); for its own echo, compared **as bytes**, because a six-decimal value
+reads back a hair different and "is the layout equal" would say no to our own
+file; and twice for the same content, which is what lets Revert restore the
+original **byte for byte** by writing the source text back rather than
+re-rendering it.
+
+`sourceText` is the file as it was when the session adopted it, and every write
+applies the whole document to *that* — never to the last thing written. It is
+what `rid` indexes into, and the only copy that still holds the comments of
+zones that have since been deleted.
+
+The reformat notice is §4 being kept honest by §5: a file that is not canonical
+says so in the bar **before the first edit**, while ⎋ is still an answer.
 
 Estimate: 400–600 lines of AppKit on a base that already knows half of it.
 
@@ -904,6 +956,13 @@ file). 6–7 days, and it is not behind MacsyZones at what people actually do.
 > section twice, in ways written up at the end of §5. Finding that out now is
 > worth more than finding it out after stages 2 through 4 have been built on top
 > of it.
+
+> **The narrow editor shipped, 2026-08-04**, in the five stretches listed at the
+> top of §5. Every one of them contradicted this document somewhere, and all of
+> those are written up there rather than here. What is still open from the full
+> twelve-day plan: the numeric panel and its expression parser, templates,
+> ⌘-drag for free overlapping zones, ⌥⇥ to reach a covered zone, holding Space
+> to hide the chrome, and per-screen assignment — which needs Stage 3 first.
 
 ### Total: ~31 days plus 20% slack ≈ 37 days
 
