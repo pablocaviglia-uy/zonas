@@ -210,8 +210,8 @@ final class DragMonitor {
 
         // The same call the overlay drew a moment ago, which is the point: the
         // window lands exactly on the rectangle that was highlighted.
-        let frame = target.zone.frame(in: area)
-        Log.write("drop: snapping into \"\(target.zone.name)\" \(frame)")
+        let frame = target.frame(in: area)
+        Log.write("drop: snapping into \"\(target.name)\" \(frame)")
         window.setFrame(frame)
     }
 }

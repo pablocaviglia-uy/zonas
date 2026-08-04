@@ -42,6 +42,23 @@ enum Coords {
 
 extension NSScreen {
 
+    /// The display this screen is showing on.
+    ///
+    /// **`NSScreen` instances are not identity.** AppKit replaces them wholesale
+    /// whenever displays are reconfigured — plugging a monitor in, waking from
+    /// sleep, changing the resolution — so anything keyed by one accumulates
+    /// entries that will never be looked up again, and comparing two of them is
+    /// comparing objects that may both already be dead.
+    ///
+    /// The display ID survives all of that, and it is the same number the
+    /// Accessibility and CoreGraphics APIs use. Verified present in
+    /// `deviceDescription` on this machine, and documented as always being
+    /// there.
+    var displayID: CGDirectDisplayID? {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+            .uint32Value
+    }
+
     /// The screen's full frame in CG coordinates.
     var cgFrame: CGRect { Coords.cocoaToCG(frame) }
 

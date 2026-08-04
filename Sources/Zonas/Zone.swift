@@ -106,11 +106,23 @@ struct Layout: Codable, Equatable {
     /// shared instance. It used to hang off the store, which meant the only way
     /// to ask the question was to have already read a file, and it is also what
     /// lets a drag hold one layout still while the file changes underneath.
-    func zone(under point: CGPoint, in area: CGRect) -> (zone: Zone, rect: CGRect)? {
-        zones
-            .map { (zone: $0, rect: $0.rect(in: area)) }
+    ///
+    /// It answers with an **index**, because that is the only handle that is
+    /// still right when two zones are identical. The overlay used to work out
+    /// which zone to highlight by comparing rectangles, which held only as long
+    /// as nobody duplicated a zone — and with a config file people duplicate
+    /// zones, that is what a config file is for.
+    func zoneIndex(under point: CGPoint, in area: CGRect) -> Int? {
+        zones.indices
+            .map { (index: $0, rect: zones[$0].rect(in: area)) }
             .filter { $0.rect.contains(point) }
-            .min { $0.rect.width * $0.rect.height < $1.rect.width * $1.rect.height }
+            .min { $0.rect.width * $0.rect.height < $1.rect.width * $1.rect.height }?
+            .index
+    }
+
+    /// The zone itself, for the callers that do not care which one it is.
+    func zone(under point: CGPoint, in area: CGRect) -> Zone? {
+        zoneIndex(under: point, in: area).map { zones[$0] }
     }
 }
 

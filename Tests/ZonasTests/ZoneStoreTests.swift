@@ -96,7 +96,24 @@ struct HitTestingTests {
     func findsTheZone() {
         let hit = Layout.threeColumns.zone(under: CGPoint(x: 2660, y: 700), in: area)
 
-        #expect(hit?.zone.name == "Center")
+        #expect(hit?.name == "Center")
+    }
+
+    /// Comparing rectangles used to be how the overlay knew which zone to
+    /// highlight, and duplicating a zone is a thing a config file invites you to
+    /// do. The index tells the two apart; a rectangle never could.
+    @Test("Two zones with the same geometry are still told apart")
+    func duplicateZonesAreDistinguishable() {
+        let layout = Layout(name: "Duplicated", zones: [
+            Zone(name: "Left",  x: 0, y: 0, width: 0.5, height: 1),
+            Zone(name: "Left again", x: 0, y: 0, width: 0.5, height: 1),
+        ])
+
+        let index = layout.zoneIndex(under: CGPoint(x: 500, y: 700), in: area)
+
+        // The first one wins, because `min(by:)` keeps the earlier of two equals
+        // — what matters is that exactly one of them does.
+        #expect(index == 0)
     }
 
     /// The gap is something you see, not something you can fall into. If the
@@ -123,8 +140,8 @@ struct HitTestingTests {
             Zone(name: "Corner",     x: 0.75, y: 0.75, width: 0.25, height: 0.25),
         ])
 
-        #expect(layout.zone(under: CGPoint(x: 5000, y: 1400), in: area)?.zone.name == "Corner")
-        #expect(layout.zone(under: CGPoint(x: 200,  y: 100),  in: area)?.zone.name == "Everything")
+        #expect(layout.zone(under: CGPoint(x: 5000, y: 1400), in: area)?.name == "Corner")
+        #expect(layout.zone(under: CGPoint(x: 200,  y: 100),  in: area)?.name == "Everything")
     }
 
     @Test("A point outside every zone finds nothing")

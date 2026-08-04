@@ -6,12 +6,18 @@ import AppKit
 /// else. It takes no part in the drag: it only draws.
 final class OverlayController {
 
-    private var windows: [NSScreen: NSWindow] = [:]
-    private var currentScreen: NSScreen?
+    /// One overlay window per **display**, not per `NSScreen`.
+    ///
+    /// See `NSScreen.displayID`: AppKit hands out fresh `NSScreen` instances on
+    /// every display reconfiguration, so a dictionary keyed by one grew a new
+    /// entry —and a new window— every time a monitor was plugged in, and never
+    /// let go of the old ones.
+    private var windows: [CGDirectDisplayID: NSWindow] = [:]
+    private var currentDisplay: CGDirectDisplayID?
 
     /// What is on screen right now, so that an event that changes nothing does
     /// nothing. See `show(_:cursor:on:)`.
-    private var shown: (layout: Layout, active: CGRect?)?
+    private var shown: (layout: Layout, activeIndex: Int?)?
 
     /// Shows the zones of one layout and highlights the one under the cursor.
     ///
@@ -27,13 +33,19 @@ final class OverlayController {
     ///   - point: cursor position in CG coordinates.
     ///   - screen: the screen the drag is happening on.
     func show(_ layout: Layout, cursor point: CGPoint, on screen: NSScreen) {
-        if currentScreen != screen { hide() }
-        currentScreen = screen
+        guard let display = screen.displayID else {
+            // Documented as always present. If it ever is not, saying so beats
+            // drawing on a screen we cannot tell apart from another one.
+            Log.write("overlay: screen without an NSScreenNumber, not drawing")
+            return
+        }
+        if currentDisplay != display { hide() }
+        currentDisplay = display
 
         let area = screen.cgVisibleFrame
-        let active = layout.zone(under: point, in: area)?.rect
+        let activeIndex = layout.zoneIndex(under: point, in: area)
 
-        let window = window(for: screen)
+        let window = window(for: screen, display: display)
         guard let view = window.contentView as? ZoneOverlayView else { return }
 
         // A mouseDragged arrives dozens of times per second and almost all of
@@ -42,10 +54,10 @@ final class OverlayController {
         // tap callback, and a tap that takes too long is one the system turns
         // off — which is what `tapDisabledByTimeout` up in DragMonitor exists to
         // notice.
-        if window.isVisible, let shown, shown.layout == layout, shown.active == active {
+        if window.isVisible, let shown, shown.layout == layout, shown.activeIndex == activeIndex {
             return
         }
-        shown = (layout, active)
+        shown = (layout, activeIndex)
 
         // Zones are computed in CG and then converted to view coordinates, which
         // are the window's: origin bottom-left and relative to its own frame.
@@ -54,13 +66,15 @@ final class OverlayController {
         // window is going to be given, and the preview showing anything else is
         // the preview lying.
         let windowFrame = window.frame
-        view.zones = layout.zones.map { zone in
-            let rectCG = zone.rect(in: area)
+        view.zones = layout.zones.enumerated().map { index, zone in
             let rectCocoa = Coords.cgToCocoa(zone.frame(in: area))
             return ZoneOverlayView.Box(
                 rect: rectCocoa.offsetBy(dx: -windowFrame.origin.x, dy: -windowFrame.origin.y),
                 name: zone.name,
-                isActive: rectCG == active
+                // By index. Two zones with the same geometry are a thing people
+                // write in a config file, and comparing rectangles would light
+                // up both of them.
+                isActive: index == activeIndex
             )
         }
 
@@ -69,12 +83,12 @@ final class OverlayController {
 
     func hide() {
         windows.values.forEach { $0.orderOut(nil) }
-        currentScreen = nil
+        currentDisplay = nil
         shown = nil
     }
 
-    private func window(for screen: NSScreen) -> NSWindow {
-        if let existing = windows[screen] {
+    private func window(for screen: NSScreen, display: CGDirectDisplayID) -> NSWindow {
+        if let existing = windows[display] {
             existing.setFrame(screen.visibleFrame, display: false)
             return existing
         }
@@ -95,7 +109,7 @@ final class OverlayController {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         window.contentView = ZoneOverlayView(frame: NSRect(origin: .zero,
                                                            size: screen.visibleFrame.size))
-        windows[screen] = window
+        windows[display] = window
         return window
     }
 }
