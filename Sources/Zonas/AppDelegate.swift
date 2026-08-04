@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     private var statusItem: NSStatusItem?
     private var launchAtLoginItem: NSMenuItem?
+    private var modifierHintItem: NSMenuItem?
     private var permissionWatchdog: Timer?
     private var layoutWatcher: LayoutWatcher?
     private let monitor = DragMonitor()
@@ -44,8 +45,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let watcher = LayoutWatcher(url: url) {
             switch LayoutStore.shared.reload() {
             case .changed:
-                Log.write("layout: reloaded, now \"\(LayoutStore.shared.layout.name)\" "
-                          + "with \(LayoutStore.shared.layout.zones.count) zones")
+                // The settings are in the line because changing only `gap` is a
+                // real edit that would otherwise log the same words as changing
+                // nothing, and leave you wondering whether it took.
+                let layout = LayoutStore.shared.layout
+                Log.write("layout: reloaded — \"\(layout.name)\", \(layout.zones.count) zones, "
+                          + "gap \(Int(layout.gap)), margin \(Int(layout.margin)), "
+                          + "\(layout.modifier.symbol)")
             case .unchanged, .failed:
                 // A save that changed nothing is not worth a line, and a save
                 // that broke the file already logged why, with the line number.
@@ -130,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private func setActive(_ isActive: Bool) {
         statusItem?.button?.appearsDisabled = !isActive
         statusItem?.button?.toolTip = isActive
-            ? "Zonas: hold ⇧ while dragging a window"
+            ? "Zonas: hold \(LayoutStore.shared.layout.modifier.symbol) while dragging a window"
             : "Zonas: the Accessibility permission is missing"
     }
 
@@ -143,8 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
         let menu = NSMenu()
         menu.delegate = self
-        menu.addItem(withTitle: "Hold ⇧ while dragging a window",
-                     action: nil, keyEquivalent: "")
+        let hint = NSMenuItem(title: modifierHint, action: nil, keyEquivalent: "")
+        modifierHintItem = hint
+        menu.addItem(hint)
         menu.addItem(.separator())
         menu.addItem(ownItem("Edit Zones…", #selector(openLayout)))
         menu.addItem(ownItem("Reload Zones", #selector(reloadLayout), key: "r"))
@@ -203,6 +210,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// so asking when it opens is the cheap way to avoid lying.
     func menuNeedsUpdate(_ menu: NSMenu) {
         launchAtLoginItem?.state = LaunchAtLogin.isEnabled ? .on : .off
+        // The modifier comes from the file and the file can change under us, so
+        // the reminder is re-read rather than baked in when the menu was built.
+        modifierHintItem?.title = modifierHint
+    }
+
+    private var modifierHint: String {
+        "Hold \(LayoutStore.shared.layout.modifier.symbol) while dragging a window"
     }
 
     /// Leaves the item greyed out in the `.build/` copy. Without this `NSMenu`

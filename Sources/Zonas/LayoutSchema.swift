@@ -65,7 +65,62 @@ extension Layout {
             firstSeen[zone.name] = element.line
         }
 
-        self.init(name: name, zones: zones)
+        let defaults = try Defaults(members.first { $0.key == "defaults" })
+
+        self.init(name: name,
+                  zones: zones,
+                  gap: defaults.gap,
+                  margin: defaults.margin,
+                  modifier: defaults.modifier)
+    }
+
+    /// The `defaults` block, or the built-in values when there is none.
+    ///
+    /// It is a block rather than three loose keys because of where this is
+    /// going: §4's design has it apply to every layout, with any layout free to
+    /// override any of it. Reading it from one place now means multiple layouts
+    /// only has to add the override, not move the keys.
+    private struct Defaults {
+        var gap = Layout.defaultGap
+        var margin = Layout.defaultMargin
+        var modifier = Modifier.shift
+
+        init(_ member: LayoutSyntax.Member?) throws {
+            guard let member else { return }
+            guard case .object(let settings) = member.node else {
+                throw LayoutSchemaError(line: member.line,
+                                        message: "defaults has to be an object, in braces")
+            }
+
+            for setting in settings {
+                switch setting.key {
+                case "gap": gap = try points(setting)
+                case "margin": margin = try points(setting)
+                case "modifier": modifier = try key(setting)
+                default: break   // a key from a newer version; the tree keeps it
+                }
+            }
+        }
+
+        private func points(_ member: LayoutSyntax.Member) throws -> CGFloat {
+            guard case .number(let literal) = member.node,
+                  let value = Double(literal), value >= 0, value.isFinite else {
+                throw LayoutSchemaError(line: member.line,
+                                        message: "\(member.key) has to be a number of points, zero or more")
+            }
+            return CGFloat(value)
+        }
+
+        private func key(_ member: LayoutSyntax.Member) throws -> Modifier {
+            guard case .string(let name) = member.node,
+                  let modifier = Modifier(rawValue: name) else {
+                throw LayoutSchemaError(
+                    line: member.line,
+                    message: "modifier has to be one of "
+                        + Modifier.allCases.map { "\"\($0.rawValue)\"" }.joined(separator: ", "))
+            }
+            return modifier
+        }
     }
 }
 

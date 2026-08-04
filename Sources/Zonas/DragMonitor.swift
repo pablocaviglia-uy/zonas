@@ -14,12 +14,9 @@ import ApplicationServices
 /// feel like lag across the whole system.
 final class DragMonitor {
 
-    /// Key that reveals the zones while dragging.
-    ///
-    /// Shift out of habit inherited from FancyZones, and because Option is
-    /// already taken by the native macOS tiling: stepping on it would make the
-    /// two fight each other.
-    static let modifier: CGEventFlags = .maskShift
+    // The key that reveals the zones is `defaults.modifier` in the file, read
+    // off the layout this drag is working against. It used to be a `static let`
+    // right here, which is where a setting goes to never become settable.
 
     /// How far the mouse has to move before it counts as a drag and not a click
     /// with an unsteady hand.
@@ -164,9 +161,8 @@ final class DragMonitor {
         // apart is deliberate: if the preview appears but nothing snaps, the
         // problem is in the identification; if nothing appears at all, the
         // problem is earlier, in the tap or in the modifier.
-        if event.flags.contains(Self.modifier) {
-            guard let layout = snapshot,
-                  let screen = NSScreen.containing(cgPoint: current) else { return }
+        if let layout = snapshot, event.flags.contains(layout.modifier.flags) {
+            guard let screen = NSScreen.containing(cgPoint: current) else { return }
             if !isOverlayVisible { Log.write("overlay: showing zones of \"\(layout.name)\"") }
             overlay.show(layout, cursor: current, on: screen)
             isOverlayVisible = true
@@ -223,7 +219,7 @@ final class DragMonitor {
 
         // The same call the overlay drew a moment ago, which is the point: the
         // window lands exactly on the rectangle that was highlighted.
-        let frame = target.frame(in: area)
+        let frame = layout.frame(of: target, in: area)
         Log.write("drop: snapping into \"\(target.name)\" \(frame)")
         window.setFrame(frame)
     }

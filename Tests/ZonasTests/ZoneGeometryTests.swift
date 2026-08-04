@@ -34,37 +34,58 @@ struct ZoneGeometryTests {
     /// visible effect of the setting.
     @Test("Neighbouring windows are separated by exactly the gap")
     func framesAreSeparatedByTheGap() {
-        let frames = Layout.threeColumns.zones.map { $0.frame(in: area) }
+        let frames = Layout.threeColumns.zones.map { Layout.threeColumns.frame(of: $0, in: area) }
 
-        #expect(frames[1].minX - frames[0].maxX == Zone.gap)
-        #expect(frames[2].minX - frames[1].maxX == Zone.gap)
-        // Half a gap against the screen edge, until `defaults.margin` exists.
-        #expect(frames[0].minX - area.minX == Zone.gap / 2)
+        #expect(frames[1].minX - frames[0].maxX == Layout.defaultGap)
+        #expect(frames[2].minX - frames[1].maxX == Layout.defaultGap)
     }
 
-    @Test("The frame sits centred inside its zone")
-    func theFrameIsCentredInTheZone() {
-        let zone = Zone(name: "Left", x: 0, y: 0, width: 0.25, height: 1)
+    /// The reason gap and margin are two settings and not one. With a single
+    /// number, `margin: 0` would still leave half a gap all the way around the
+    /// outside and there would be no way to write "flush against the edge".
+    @Test("The outside edge gets the margin, not half a gap")
+    func theOutsideGetsTheMargin() {
+        let flush = Layout.threeColumns
+        let framed = Layout(name: "Framed", zones: flush.zones, gap: 8, margin: 20)
 
-        let rect = zone.rect(in: area)
-        let frame = zone.frame(in: area)
+        #expect(flush.margin == 0)
+        #expect(flush.frame(of: flush.zones[0], in: area).minX - area.minX == 0)
+        #expect(framed.frame(of: framed.zones[0], in: area).minX - area.minX == 20)
+        // The inner edges are still the gap's business either way.
+        #expect(framed.frame(of: framed.zones[1], in: area).minX
+                - framed.frame(of: framed.zones[0], in: area).maxX == 8)
+    }
+
+    /// A zone with neighbours on both sides gives up half a gap on each, so it
+    /// stays centred. One against the edge does not, and should not.
+    @Test("A zone between two others sits centred inside it")
+    func theFrameIsCentredInTheZone() {
+        let layout = Layout.threeColumns
+        let middle = layout.zones[1]
+
+        let rect = middle.rect(in: area)
+        let frame = layout.frame(of: middle, in: area)
 
         #expect(frame.midX == rect.midX)
-        #expect(frame.midY == rect.midY)
         #expect(rect.contains(frame))
     }
 
-    /// insetBy returns CGRect.null when the inset eats the rectangle, and
-    /// CGRect.null's origin is infinity. A malformed file must not be able to
-    /// send a window there.
-    @Test("A zone thinner than the gap is left alone rather than inverted")
+    /// A malformed file must not be able to hand the Accessibility API a
+    /// rectangle no window can occupy.
+    ///
+    /// This one caught a real bug: the guard was written against the resulting
+    /// rect, and `CGRect.width` returns the **absolute value** of what is
+    /// stored, so a rect built 3.488 points wide in the wrong direction answers
+    /// 3.488 when asked how wide it is. The guard passed every time and
+    /// protected nothing.
+    @Test("A zone thinner than its own gap is left alone rather than inverted")
     func aTinyZoneKeepsItsRectangle() {
         let sliver = Zone(name: "Sliver", x: 0, y: 0, width: 0.0001, height: 1)
 
-        let frame = sliver.frame(in: area)
+        let frame = Layout.threeColumns.frame(of: sliver, in: area)
 
         #expect(frame == sliver.rect(in: area))
-        #expect(frame.width > 0)
+        #expect(frame.size.width > 0, "the rectangle came back inside out")
         #expect(frame.origin.x.isFinite)
     }
 }

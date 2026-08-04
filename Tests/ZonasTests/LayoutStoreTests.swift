@@ -124,7 +124,7 @@ struct HitTestingTests {
     func theGapIsNotAHole() {
         let boundary = Layout.threeColumns.zones[0].rect(in: area).maxX
 
-        for offset in [-Zone.gap / 2, -1, 0, 1, Zone.gap / 2] {
+        for offset in [-Layout.defaultGap / 2, -1, 0, 1, Layout.defaultGap / 2] {
             let hit = Layout.threeColumns.zone(under: CGPoint(x: boundary + offset, y: 700),
                                                in: area)
             #expect(hit != nil, "nothing under x = boundary \(offset >= 0 ? "+" : "")\(offset)")

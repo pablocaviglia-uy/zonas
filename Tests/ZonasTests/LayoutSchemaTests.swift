@@ -196,3 +196,91 @@ struct LayoutSchemaErrorTests {
         #expect("\(problem)" == "line 12: this zone has no width")
     }
 }
+
+@Suite("Settings read from the file")
+struct DefaultsTests {
+
+    private func layout(_ defaults: String) throws -> Layout {
+        try Layout(LayoutSyntax.parse("""
+        {
+          version: 1,
+          defaults: \(defaults),
+          name: "L",
+          zones: [ { name: "All", x: 0, y: 0, width: 1, height: 1 } ],
+        }
+        """))
+    }
+
+    @Test("With no defaults block, the built-in values apply")
+    func theBuiltInValues() throws {
+        let result = try Layout(LayoutSyntax.parse(#"{ name: "L", zones: [] }"#))
+
+        #expect(result.gap == 8)
+        #expect(result.margin == 0)
+        #expect(result.modifier == .shift)
+    }
+
+    @Test("gap, margin and modifier are read")
+    func allThreeAreRead() throws {
+        let result = try layout(#"{ gap: 12, margin: 20, modifier: "control" }"#)
+
+        #expect(result.gap == 12)
+        #expect(result.margin == 20)
+        #expect(result.modifier == .control)
+    }
+
+    @Test("Setting only one leaves the others alone")
+    func partialDefaults() throws {
+        let result = try layout("{ gap: 0 }")
+
+        #expect(result.gap == 0)
+        #expect(result.margin == Layout.defaultMargin)
+        #expect(result.modifier == .shift)
+    }
+
+    @Test("Every modifier the file can name maps to a real key")
+    func everyModifier() throws {
+        for modifier in Modifier.allCases {
+            let result = try layout("{ modifier: \"\(modifier.rawValue)\" }")
+
+            #expect(result.modifier == modifier)
+            #expect(!result.modifier.symbol.isEmpty)
+        }
+    }
+
+    /// A typo in a modifier has to name the alternatives. "invalid value" and a
+    /// line number still leaves you guessing what to type instead.
+    @Test("A modifier that is not a key lists the ones that are")
+    func anUnknownModifier() throws {
+        let problem = #expect(throws: LayoutSchemaError.self) {
+            try layout(#"{ modifier: "hyper" }"#)
+        }
+
+        #expect(problem?.message.contains("\"shift\"") == true)
+        #expect(problem?.message.contains("\"command\"") == true)
+        #expect(problem?.line == 3)
+    }
+
+    @Test("A negative gap is refused")
+    func anegativeGap() throws {
+        let problem = #expect(throws: LayoutSchemaError.self) {
+            try layout("{ gap: -4 }")
+        }
+
+        #expect(problem?.message.contains("zero or more") == true)
+    }
+
+    @Test("A key in defaults that this version does not know is ignored")
+    func unknownSettingsAreIgnored() throws {
+        let result = try layout(#"{ gap: 4, animation: "fade" }"#)
+
+        #expect(result.gap == 4)
+    }
+
+    @Test("defaults has to be an object")
+    func defaultsMustBeAnObject() throws {
+        let problem = #expect(throws: LayoutSchemaError.self) { try layout("8") }
+
+        #expect(problem?.message.contains("in braces") == true)
+    }
+}

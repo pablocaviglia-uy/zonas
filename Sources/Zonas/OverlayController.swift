@@ -67,7 +67,7 @@ final class OverlayController {
         // the preview lying.
         let windowFrame = window.frame
         view.zones = layout.zones.enumerated().map { index, zone in
-            let rectCocoa = Coords.cgToCocoa(zone.frame(in: area))
+            let rectCocoa = Coords.cgToCocoa(layout.frame(of: zone, in: area))
             return ZoneOverlayView.Box(
                 rect: rectCocoa.offsetBy(dx: -windowFrame.origin.x, dy: -windowFrame.origin.y),
                 name: zone.name,
@@ -129,7 +129,7 @@ final class ZoneOverlayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         for box in zones {
-            // No inset here. The gap belongs to the zone —`Zone.frame(in:)`—
+            // No inset here. The gap belongs to the layout —`frame(of:in:)`—
             // because the snap has to apply the very same one, and a number
             // that lives in the drawing code is a number the snap cannot see.
             let frame = box.rect

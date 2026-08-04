@@ -51,26 +51,69 @@ struct Zone: Equatable {
     /// was a shape no window was ever going to be given. A preview that lies is
     /// worse than no preview: you learn to distrust it and then it is only in
     /// the way.
-    func frame(in area: CGRect, gap: CGFloat = Zone.gap) -> CGRect {
+    /// Each side gives up half a gap to its neighbour — **except the sides that
+    /// are against the edge of the screen**, which give up the margin instead.
+    ///
+    /// That distinction is the whole reason there are two settings. Without it,
+    /// `margin: 0` would still leave half a gap all the way around the outside
+    /// and there would be no way to write "flush against the edge", which is
+    /// what most people want on a laptop and nobody wants on an ultrawide.
+    func frame(in area: CGRect, gap: CGFloat, margin: CGFloat) -> CGRect {
         let full = rect(in: area)
-        // insetBy hands back CGRect.null when the inset eats the rectangle, and
-        // CGRect.null's origin is infinity — which would go straight to the
-        // Accessibility API. A zone thinner than the gap is a broken file, not a
-        // layout, and leaving it alone says so more usefully than a window at
-        // infinity would.
-        guard full.width > gap, full.height > gap else { return full }
-        return full.insetBy(dx: gap / 2, dy: gap / 2)
+
+        // Half a point of slack: these come out of fraction arithmetic, so a
+        // zone written to reach the edge lands on it to within rounding rather
+        // than exactly.
+        let touching: CGFloat = 0.5
+        let left = abs(full.minX - area.minX) < touching ? margin : gap / 2
+        let right = abs(full.maxX - area.maxX) < touching ? margin : gap / 2
+        let top = abs(full.minY - area.minY) < touching ? margin : gap / 2
+        let bottom = abs(full.maxY - area.maxY) < touching ? margin : gap / 2
+
+        let width = full.width - left - right
+        let height = full.height - top - bottom
+
+        // A zone narrower than its own gap would come back inside out, and the
+        // Accessibility API would be handed a rectangle no window can occupy. A
+        // zone that small is a broken file, not a layout, and leaving it alone
+        // says so more usefully than a negative size would.
+        //
+        // The check is on these two numbers and **not** on the resulting rect,
+        // because `CGRect.width` hands back the absolute value of what is
+        // stored: build a rect 3.488 points wide in the wrong direction and ask
+        // it how wide it is, and it cheerfully answers 3.488. A guard written
+        // against the rect passes every time and protects nothing.
+        guard width > 0, height > 0 else { return full }
+        return CGRect(x: full.minX + left, y: full.minY + top, width: width, height: height)
+    }
+}
+
+/// The key held down to summon the zones.
+///
+/// Option is a deliberate trap to warn people about rather than to forbid: macOS
+/// has taken it for its own tiling, so choosing it makes the two features fight
+/// each other over every drag.
+enum Modifier: String, CaseIterable, Equatable {
+    case shift, control, option, command
+
+    var flags: CGEventFlags {
+        switch self {
+        case .shift: return .maskShift
+        case .control: return .maskControl
+        case .option: return .maskAlternate
+        case .command: return .maskCommand
+        }
     }
 
-    /// Space between two neighbouring windows, in points.
-    ///
-    /// Each of the two gives up half, so this is the number you actually see
-    /// between them — and half of it is what is left against the screen edge,
-    /// until `defaults.margin` exists to say otherwise.
-    ///
-    /// Hardcoded for now, and that is fine; what was not fine was having it
-    /// written down in two places that disagreed.
-    static let gap: CGFloat = 8
+    /// How it reads in a menu.
+    var symbol: String {
+        switch self {
+        case .shift: return "⇧"
+        case .control: return "⌃"
+        case .option: return "⌥"
+        case .command: return "⌘"
+        }
+    }
 }
 
 /// A set of zones that are used together.
@@ -84,6 +127,27 @@ struct Zone: Equatable {
 struct Layout: Equatable {
     var name: String
     var zones: [Zone]
+
+    /// Points of air between two neighbouring windows. Each gives up half, so
+    /// this is the number you actually see between them.
+    var gap: CGFloat = Layout.defaultGap
+    /// Points between the outermost windows and the edge of the screen.
+    var margin: CGFloat = Layout.defaultMargin
+    /// The key held down to summon the zones.
+    var modifier: Modifier = .shift
+
+    static let defaultGap: CGFloat = 8
+    static let defaultMargin: CGFloat = 0
+
+    /// The rectangle a window dropped in this zone is given.
+    ///
+    /// It lives here rather than on `Zone` because the gap and the margin belong
+    /// to the layout, and a caller that has to fetch them separately is a caller
+    /// that can fetch the wrong ones. §3e was that bug in miniature: the drawing
+    /// code and the snapping code each knew a number, and they differed.
+    func frame(of zone: Zone, in area: CGRect) -> CGRect {
+        zone.frame(in: area, gap: gap, margin: margin)
+    }
 
     /// Three columns 25 / 50 / 25: the middle one for the window being worked
     /// on and the side ones for whatever is being consulted. It is the layout

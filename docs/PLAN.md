@@ -595,7 +595,7 @@ calendar week. **Every stage ships on its own.**
 | `LayoutSyntax`: tokenizer + tree + canonical writer, **with tests 1–6** | 3 | **done** |
 | `LayoutFile` + `LayoutWatcher` (two sources, retry, symlinks) + `LayoutStore` `@MainActor` | 1.5 | **done**, except `@MainActor` |
 | Migration `layout.json` v0 → `zonas.json5` v1 with backup; XDG paths with an ambiguity error | 1 | **done** |
-| `gap`/`margin`/`modifier` actually honoured (fixes the lying preview) | 0.5 | preview fixed; the values are still hardcoded |
+| `gap`/`margin`/`modifier` actually honoured (fixes the lying preview) | 0.5 | **done** |
 | Icon in alerts + `zonas check` / `fmt` / `monitors` | 0.5 | |
 | README split into user and contributor + demo GIF | 0.5 | reframed to lead with the file; split and GIF pending |
 

@@ -67,9 +67,19 @@ enum LayoutFile {
     // If the file does not parse, Zonas says so in ~/Library/Logs/Zonas.log,
     // keeps the zones it already had, and does not touch a byte of what you
     // wrote.
+    //
+    // A word about "option" as the modifier: macOS has taken it for its own
+    // tiling, so choosing it here makes the two fight over every drag.
 
     {
       version: 1,  // the format, not the app
+
+      defaults: {
+        modifier: "shift",  // shift | control | option | command
+        gap: 8,  // points of air between two windows
+        margin: 0,  // points between a window and the edge of the screen
+      },
+
       name: "Three Columns",
 
       // Editor in the middle, docs on the left, chat on the right. It is the
