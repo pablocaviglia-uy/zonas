@@ -34,7 +34,12 @@ enum LayoutSyntax {
     // MARK: - The tree
 
     /// A parsed value, plus whatever is needed to write it back out unharmed.
-    enum Node: Equatable {
+    ///
+    /// Deliberately **not** `Equatable`. "Are these two trees the same?" has no
+    /// good answer — same values but different comments? same comments but a
+    /// line apart? — and the question anybody actually wants answered is about
+    /// the layout, which is `Equatable` and means exactly one thing.
+    enum Node {
         case object([Member])
         case array([Element])
         case string(String)
@@ -49,16 +54,24 @@ enum LayoutSyntax {
     }
 
     /// One `key: value` inside an object.
-    struct Member: Equatable {
+    struct Member {
         var key: String
         var node: Node
         var comments = Comments()
+        /// The line the key is on.
+        ///
+        /// It is here so that "zones has to be a list" can say *which* line to
+        /// go look at. A schema error without one is barely better than no
+        /// error: the whole promise of a config file is that you can fix it.
+        var line = 0
     }
 
     /// One value inside an array.
-    struct Element: Equatable {
+    struct Element {
         var node: Node
         var comments = Comments()
+        /// The line the value starts on. See `Member.line`.
+        var line = 0
     }
 
     /// The comments attached to a node, and the blank line above it.
@@ -68,7 +81,7 @@ enum LayoutSyntax {
     /// somewhere there is no node to attach them to — those attach to the node
     /// that follows, by the rule in `trailingComment()`. ASCII diagrams do
     /// survive: the lexer keeps comment text verbatim, byte for byte.
-    struct Comments: Equatable {
+    struct Comments {
         /// Comments sitting on the lines above.
         var leading: [String] = []
         /// A comment on the same line, after the value.
@@ -82,9 +95,12 @@ enum LayoutSyntax {
     /// The preamble gets a slot of its own because there is no node for it to
     /// attach to. Without it, the twenty lines that explain the file to whoever
     /// opens it would be dropped by the first write.
-    struct Document: Equatable {
+    struct Document {
         var preamble: [String] = []
         var root: Node
+        /// The line the top-level value opens on, for the errors that are about
+        /// the file as a whole rather than about one key in it.
+        var rootLine = 1
     }
 
     /// A syntax error, with the place it happened.

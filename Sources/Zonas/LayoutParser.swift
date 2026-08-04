@@ -28,13 +28,14 @@ extension LayoutSyntax {
         mutating func parseDocument() throws -> Document {
             skipTrivia()
             let (preamble, _) = takePending()
+            let rootLine = line
             let root = try parseValue()
             skipTrivia()
             guard atEnd else { throw fail("trailing content after the top-level value") }
             // Anything after the top-level value has nowhere to live. Saying so
             // beats dropping it silently on the next write.
             guard pending.isEmpty else { throw fail("a comment after the closing brace has nothing to attach to") }
-            return Document(preamble: preamble, root: root)
+            return Document(preamble: preamble, root: root, rootLine: rootLine)
         }
 
         // MARK: - Values
@@ -65,6 +66,7 @@ extension LayoutSyntax {
                 if source[index] == Byte.rightBrace { advance(); break }
 
                 let (leading, blank) = takePending()
+                let keyLine = line
                 let key = try parseKey()
                 skipTrivia()
                 guard !atEnd, source[index] == Byte.colon else {
@@ -79,7 +81,8 @@ extension LayoutSyntax {
                 members.append(Member(key: key, node: value,
                                       comments: Comments(leading: leading,
                                                          trailing: takeTrailingComment(),
-                                                         blankLineBefore: blank)))
+                                                         blankLineBefore: blank),
+                                      line: keyLine))
             }
             return .object(members)
         }
@@ -94,6 +97,7 @@ extension LayoutSyntax {
                 if source[index] == Byte.rightBracket { advance(); break }
 
                 let (leading, blank) = takePending()
+                let valueLine = line
                 let value = try parseValue()
                 skipTrivia()
                 if !atEnd, source[index] == Byte.comma { advance() }
@@ -101,7 +105,8 @@ extension LayoutSyntax {
                 elements.append(Element(node: value,
                                         comments: Comments(leading: leading,
                                                            trailing: takeTrailingComment(),
-                                                           blankLineBefore: blank)))
+                                                           blankLineBefore: blank),
+                                        line: valueLine))
             }
             return .array(elements)
         }
