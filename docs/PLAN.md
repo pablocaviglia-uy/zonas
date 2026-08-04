@@ -435,6 +435,32 @@ it rewrites on every launch.
 
 ## 5. The editor
 
+> **Started 2026-08-04, as the narrow editor.** §7's "legitimate fallback" was
+> taken deliberately rather than after running out of days: split zones and move
+> edges, no layout management. It is being built in five stretches, and the
+> first one has landed (`218a82a`).
+>
+> | Stretch | What it is | |
+> |---|---|---|
+> | 1 | The window: one per screen, dimmed desktop, zones drawn, **no editing** | **done** |
+> | 2 | Click to split, ⇧ rotates the axis, hover preview | |
+> | 3 | Edge dragging with collinear coalescence, ⌥ to break it | |
+> | 4 | Rational snapping, px+fraction labels, delete | |
+> | 5 | The write path through `LayoutSyntax`, undo, conflict banner | |
+>
+> **Stretch 1 offering no editing was the point, not a shortfall.** Everything
+> difficult about an editor is in the window — the coordinate space, the levels,
+> the Spaces, the keyboard, the app's own event tap — and none of it is easier
+> to debug underneath a drag gesture. What it found is written up under
+> "What stretch 1 established" below, and the tap suspension in particular
+> turned out to have a second half that this section did not know about.
+>
+> Note that the write path is stretch **5**, not stretch 2. Everything before it
+> edits an in-memory document and shows it; nothing touches the file. That
+> ordering is Rule 1 read the strict way: the syntax exists, so the editor may
+> be built against it, but the editor becomes a *writer* last, when there is
+> something worth writing and the conflict question has an answer.
+
 ### Full-screen over the real desktop
 
 One window per screen, exactly `screen.visibleFrame`. The strong argument is not
@@ -463,6 +489,48 @@ inside the editor fires the drag overlay and the two fight.
 Levels: the editor goes at `.floating` (3), *below* the menu bar, so you can see
 the strip you are excluding. The drag overlay stays at `.popUpMenu` (101)
 because it has to cover the window being moved.
+
+### What stretch 1 established
+
+Everything above held. Four things it did not say, all found by running it
+rather than by testing it:
+
+**The shared piece is the geometry, not the window.** `Coords.cgToView(_:filling:)`
+turns a CG rectangle into the coordinates of a view covering one screen's usable
+area, and `Layout.viewFrames(in:)` is the whole of what the overlay and the
+editor have in common. Extracting it improved it: flipping against the desktop's
+ceiling and then subtracting the window's origin uses `primaryMaxY` twice with
+opposite signs, so it cancels, and the function has no global in it at all —
+which is why it now has tests that state an answer instead of asking the
+machine. The *window* is not shared, and should not be: the four lines where the
+two differ are level, Spaces, mouse events and key-ness, which is all of them.
+
+**Suspending the tap has a second half.** Disabling it is not enough, because
+the system then delivers `tapDisabledByUserInput` — measured at 48 ms — and the
+recovery path that exists to keep the app from going permanently deaf turns it
+straight back on. `DragMonitor.isSuspended` is what the recovery path consults.
+`start()` consults it too: the editor does not need the Accessibility permission
+to draw, so it can be open when the permission watchdog finally succeeds, and
+that is the one door into a live tap that does not go through `setEnabled`.
+
+**Do not fill the zones.** The overlay fills each with white at 8% and is right
+to; over the editor's scrim the same fill is additive where the scrim is
+multiplicative, giving `0.36·b + 0.10` instead of `0.4·b`. On a dark desktop
+(b ≈ 0.13) that is *brighter than not dimming at all*, which is exactly what the
+first build did and looked like. Zones tile the screen, so a per-zone fill is
+not a highlight — it is a second scrim with the opposite sign. Outline and label
+carry it. The fill is reserved for stretch 2, where there is a zone to single
+out and it will earn its keep.
+
+**Both ways out have to hop a run loop turn.** Escape and Done are both called
+while AppKit is delivering an event to the window or to a button inside it, and
+closing releases the last reference to that window. Deallocating an `NSWindow`
+in the middle of its own `keyDown` is a crash that depends on the autorelease
+pool, which means it happens on somebody else's machine and not on this one.
+
+Showing the Dock is the cheap way to exercise display reconfiguration without
+unplugging anything: it fires `didChangeScreenParametersNotification` and takes
+the ultrawide's `visibleFrame` from 5120 × 1410 to 5120 × 1320.
 
 Estimate: 400–600 lines of AppKit on a base that already knows half of it.
 
@@ -706,6 +774,20 @@ of the principle. Worth paying, but budget it rather than discover it.
 **Legitimate fallback if 12 days do not fit:** ship a **narrower and excellent**
 editor — split and move edges only, no layout management (that stays in the
 file). 6–7 days, and it is not behind MacsyZones at what people actually do.
+
+> **Taken, 2026-08-04, and not as a fallback.** The narrow editor is being built
+> now, out of order and before stages 2–4, in the five stretches listed at the
+> top of §5. The ordering argument in stage 4 below — that an editor for an app
+> which cannot move your Chrome window is worse than the reverse — still stands
+> and is not being contradicted: what moved is the *editor*, not the release.
+> Nothing here ships before window robustness does.
+>
+> It moved because §5 was the largest pile of undischarged design risk left in
+> the document, and every day it stayed on paper was a day the plan was
+> confident about things nobody had run. Stretch 1 alone contradicted this
+> section twice, in ways written up at the end of §5. Finding that out now is
+> worth more than finding it out after stages 2 through 4 have been built on top
+> of it.
 
 ### Total: ~31 days plus 20% slack ≈ 37 days
 
