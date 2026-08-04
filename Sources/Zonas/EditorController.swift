@@ -2,12 +2,14 @@ import AppKit
 
 /// The zone editor: one window per screen, over the real desktop, at 1:1.
 ///
-/// This is the first of five pieces and it deliberately offers no editing at
-/// all. Everything hard about the editor is in getting the window up and
-/// leaving it correct — the coordinate space, the levels, the Spaces, the
-/// keyboard, and the fact that the app's own event tap has to be told to be
-/// quiet — and none of that is easier to debug with a drag gesture on top of
-/// it.
+/// The first stretch built the window and offered no editing, because
+/// everything hard about an editor is in getting the window up and leaving it
+/// correct and none of that is easier to debug with a gesture on top of it. The
+/// second adds the primary gesture: **a click splits a zone in two**, at the
+/// cursor, with ⇧ rotating the cut.
+///
+/// **It still does not write.** Splits change `document` and closing throws it
+/// away — see `EditorDocument`.
 ///
 /// **Full screen at 1:1 rather than a scaled panel**, which is §5's decision
 /// and the reason there is no arithmetic in here: one point in this window is
@@ -29,6 +31,19 @@ final class EditorController {
 
     private(set) var isOpen = false
 
+    /// What is being edited, for every screen at once.
+    ///
+    /// The controller owns it and the views are handed copies. `EditorDocument`
+    /// is a value type, which is what makes that safe and is most of the reason
+    /// it is one: a view can build a *candidate* document to show what a split
+    /// would do without any chance of that becoming the real one.
+    private var document: EditorDocument?
+
+    /// Set when the file changed underneath a document that has been edited.
+    /// See `refresh` — this is the smallest honest version of §5's conflict
+    /// banner, and it exists because splitting made it necessary.
+    private var fileChangedUnderneath = false
+
     /// Fires on open and on close. It exists because "the editor is up" is not
     /// only the editor's business: the drag monitor has to stop listening while
     /// it is, and putting that rule inside this class would hide the app's one
@@ -43,6 +58,11 @@ final class EditorController {
         // and the screen is still dimmed.
         guard !isOpen else { return activate() }
 
+        // The document is built once, here, from whatever the store holds. From
+        // this moment the editor is working on its own copy — see `refresh` for
+        // what happens when the file moves underneath it.
+        document = EditorDocument(LayoutStore.shared.layout)
+        fileChangedUnderneath = false
         build()
         guard !windows.isEmpty else {
             Log.write("editor: not a single screen reported a display ID, not opening")
@@ -63,7 +83,15 @@ final class EditorController {
 
     func close() {
         guard isOpen else { return }
+        if document?.isEdited == true {
+            // Worth a line, because until the last stretch this is where an
+            // editing session goes: nowhere. Silence would make it look like it
+            // had been saved.
+            Log.write("editor: closing with \(document?.zones.count ?? 0) zones — "
+                      + "nothing is written yet, the file is untouched")
+        }
         tearDown()
+        document = nil
         isOpen = false
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
@@ -73,25 +101,31 @@ final class EditorController {
 
     /// The file changed while the editor was open.
     ///
-    /// Redrawing costs five lines and keeps the editor's claim — that it shows
-    /// the zones you have — true rather than true-when-it-opened. It is free
-    /// right now precisely because this piece has nothing of its own to lose: it
-    /// holds no edit, so there is nothing for an external change to conflict
-    /// with. The piece that introduces the write path is the one that has to
-    /// answer that question properly, with the banner §5 describes.
+    /// **Once you have split something, the document wins.** Following the file
+    /// was free in the first stretch because the editor held nothing of its own;
+    /// now it does, and replacing an edited document with a reload would throw
+    /// away work in response to something happening on another screen.
+    ///
+    /// So: an untouched editor keeps following the file, which is the live
+    /// reload this whole project is about. An edited one stops, and says so in
+    /// the bar rather than diverging quietly. That is the smallest honest
+    /// version of §5's conflict banner, and stretch 2 is what made it necessary
+    /// rather than optional — the full thing, with a way to take the file's
+    /// side, belongs with the write path.
     func refresh() {
-        guard isOpen else { return }
-        let layout = LayoutStore.shared.layout
-        let problem = LayoutStore.shared.problem
-        for window in windows.values { window.editorView?.show(layout, problem: problem) }
+        guard isOpen, let current = document else { return }
+
+        if current.isEdited {
+            fileChangedUnderneath = true
+        } else {
+            document = EditorDocument(LayoutStore.shared.layout)
+        }
+        render()
     }
 
     // MARK: - Windows
 
     private func build() {
-        let layout = LayoutStore.shared.layout
-        let problem = LayoutStore.shared.problem
-
         for screen in NSScreen.screens {
             guard let display = screen.displayID else {
                 Log.write("editor: a screen has no NSScreenNumber, skipping it")
@@ -99,20 +133,64 @@ final class EditorController {
             }
             let window = EditorWindow(screen: screen)
             window.onCancel = { [weak self] in self?.close() }
-            window.editorView?.show(layout, problem: problem)
+            window.onUndo = { [weak self] in self?.undo() }
+            window.onSplit = { [weak self] rid, fraction, cut, minimum in
+                self?.split(rid: rid, at: fraction, cut, minimum: minimum)
+            }
             windows[display] = window
         }
+        render()
     }
 
     private func tearDown() {
         for window in windows.values {
-            // The closure holds this controller, and this controller holds the
-            // window. It is broken here rather than by hoping `orderOut` is the
-            // last thing that ever touches it.
+            // The closures hold this controller, and this controller holds the
+            // window. They are broken here rather than by hoping `orderOut` is
+            // the last thing that ever touches it.
             window.onCancel = nil
+            window.onUndo = nil
+            window.onSplit = nil
             window.orderOut(nil)
         }
         windows.removeAll()
+    }
+
+    // MARK: - Editing
+
+    /// Every screen draws the same document, so every screen is redrawn.
+    private func render() {
+        guard let document else { return }
+        let note = fileChangedUnderneath
+            ? "⚠︎ the file changed while you were editing — this is your version"
+            : LayoutStore.shared.problem.map { "⚠︎ \($0) — showing the last layout that read cleanly" }
+        for window in windows.values {
+            window.editorView?.show(document, note: note)
+        }
+    }
+
+    private func split(rid: Int, at fraction: Double, _ cut: Cut, minimum: Double) {
+        guard var document else { return }
+        guard document.split(rid: rid, at: fraction, cut, minimum: minimum) else { return }
+        self.document = document
+        Log.write("editor: split into \(document.zones.count) zones")
+        render()
+    }
+
+    private func undo() {
+        guard var document, document.undo() else { return }
+        self.document = document
+
+        // Undoing back to the start makes the document untouched again, and an
+        // untouched document is one that follows the file. **Following it means
+        // re-reading it here**, not at the next save: the file may well have
+        // moved while the document was refusing to listen, and clearing the
+        // warning while still showing the old version would be the same lie the
+        // warning was put there to avoid.
+        if !document.isEdited {
+            fileChangedUnderneath = false
+            self.document = EditorDocument(LayoutStore.shared.layout)
+        }
+        render()
     }
 
     /// Displays came or went while the editor was up.
@@ -162,6 +240,13 @@ final class EditorWindow: NSWindow {
     /// is a closure back to the controller and not a method here.
     var onCancel: (() -> Void)?
 
+    /// Everything that changes the document goes back up to the controller, for
+    /// the same reason: there is one document and there are two windows, and a
+    /// window that edited its own copy would be a second layout nobody asked
+    /// for. The window reports what happened in it; the controller decides.
+    var onUndo: (() -> Void)?
+    var onSplit: ((_ rid: Int, _ fraction: Double, _ cut: Cut, _ minimum: Double) -> Void)?
+
     var editorView: EditorView? { contentView as? EditorView }
 
     init(screen: NSScreen) {
@@ -178,6 +263,11 @@ final class EditorWindow: NSWindow {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
+
+        // The cut line follows the cursor, so the window has to hear about a
+        // cursor that is only moving. Off by default, and the tracking area in
+        // the view is not enough on its own.
+        acceptsMouseMovedEvents = true
 
         // Created in code and owned by a dictionary, so ARC is what should free
         // it. Left at its default, any stray `close()` would over-release.
@@ -205,12 +295,32 @@ final class EditorWindow: NSWindow {
     /// "there is a window on screen" and "there is a window you can talk to".
     override var canBecomeKey: Bool { true }
 
-    /// 53 is Escape. It is read from the key code and not from the characters,
+    /// The keyboard is handled here and not in the view, because the window is
+    /// the responder that is certain to see it. Whatever holds focus — the
+    /// content view, the Done button, or nothing at all — an unhandled key
+    /// walks up the chain and arrives here; a view that is not first responder
+    /// would simply never be asked.
+    ///
+    /// 53 is Escape, read from the key code and not from the characters,
     /// because the characters depend on the keyboard layout and this key does
-    /// not.
+    /// not. ⌘Z is read from the characters, because *that* one is a letter and
+    /// its key code depends on the layout.
     override func keyDown(with event: NSEvent) {
-        guard event.keyCode == 53 else { return super.keyDown(with: event) }
-        cancel(nil)
+        if event.keyCode == 53 { return cancel(nil) }
+        if event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "z" {
+            return onUndo?() ?? ()
+        }
+        super.keyDown(with: event)
+    }
+
+    /// ⇧ rotates the cut, and it has to rotate it **without the mouse moving** —
+    /// you hold the modifier to see what it would do. Nothing else in the app
+    /// needs this event, and a cut line that only turned when you jiggled the
+    /// cursor would read as a bug in the modifier.
+    override func flagsChanged(with event: NSEvent) {
+        editorView?.modifiersChanged(to: event.modifierFlags)
+        super.flagsChanged(with: event)
     }
 
     /// Both ways out arrive here, and both arrive **while AppKit is delivering
@@ -237,6 +347,22 @@ final class EditorView: NSView {
         let name: String
     }
 
+    /// What a click right now would do.
+    ///
+    /// It is recomputed from the cursor rather than remembered, so there is no
+    /// state to get out of step with the pointer — and it is `Equatable` so that
+    /// a redraw only happens when the answer changed. A `mouseMoved` arrives
+    /// dozens of times a second and this view is 5120 points wide.
+    private struct Hover: Equatable {
+        let rid: Int
+        let cut: Cut
+        /// Where the cut would fall, as a fraction of the screen's usable area
+        /// along the axis being cut — the units the document works in.
+        let fraction: Double
+        /// The line to draw, in view coordinates.
+        let line: CGRect
+    }
+
     /// §5 says "the real desktop dimmed to 40%", and this is the reading it
     /// takes: the desktop is left at 40% of itself, so the fill over it is 60%
     /// black. Dark enough that a white outline reads at a glance, light enough
@@ -245,13 +371,35 @@ final class EditorView: NSView {
     /// seeing what your zones would do to the windows you actually have open.
     private static let desktopBrightness: CGFloat = 0.4
 
+    /// The narrowest piece a click is allowed to leave behind, in points.
+    ///
+    /// Not a judgement about useful window sizes — it is there so that a click
+    /// aimed at a boundary does not become a sliver. That makes the number a
+    /// question about aim, and the answer is "comfortably more than the eight
+    /// points the drag threshold already calls a steady hand". Below this the
+    /// cut line is not drawn at all, so the rule explains itself: no line, no
+    /// split, and you can see where the band ends.
+    private static let smallestPiece: CGFloat = 40
+
     /// The screen's usable area in CG coordinates. Zones are fractions of this,
     /// and this view covers exactly it — that equality is the 1:1 claim, and
     /// `Coords.cgToView` is where it gets cashed in.
     private let area: CGRect
 
     private let hud = EditorHUD()
-    private var boxes: [Box] = []
+    private var document: EditorDocument?
+    private var note: String?
+
+    /// Last known cursor position in view coordinates, and whether ⇧ is down.
+    /// Both are kept rather than read from the current event, because the two
+    /// arrive separately: ⇧ has to turn the cut line while the mouse is still,
+    /// and the mouse has to move the line while ⇧ is still held.
+    private var cursor: CGPoint?
+    private var shiftHeld = false
+    private var hover: Hover?
+    private var mouseDownAt: CGPoint?
+
+    private var host: EditorWindow? { window as? EditorWindow }
 
     init(frame: NSRect, area: CGRect) {
         self.area = area
@@ -262,40 +410,174 @@ final class EditorView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("Zonas builds its windows in code") }
 
-    func show(_ layout: Layout, problem: String?) {
-        // `viewFrames` draws `frame` and not `rect`, which is the same call the
-        // drag overlay makes and for the same reason: the frame is the rectangle
-        // a window dropped here is given, gap and margin included. An editor
-        // showing a shape no window will ever be given is §3e back again, in the
-        // one place where the drawing is not a preview of the product but the
-        // product.
-        //
-        // Hit-testing, when this piece grows any, has to go the other way and
-        // ask `rect` — the regions that tile — or every gap becomes a band where
-        // clicking selects nothing.
-        boxes = layout.viewFrames(in: area).enumerated().map {
-            Box(rect: $1, name: layout.zones[$0].name)
-        }
-
-        hud.show(title: layout.name, hint: hint(for: layout, problem: problem))
-        layOutHUD()
+    func show(_ document: EditorDocument, note: String?) {
+        self.document = document
+        self.note = note
+        // The document just changed under the cursor, so what a click would do
+        // has changed with it.
+        recomputeHover()
+        updateHUD()
         needsDisplay = true
     }
 
-    private func hint(for layout: Layout, problem: String?) -> String {
-        if let problem {
-            // Saying which zones these are matters more here than anywhere else
-            // in the app. The store keeps the last layout that read cleanly, so
-            // the editor is showing something real — just not what is in the
-            // file the user is about to go and look at.
-            return "⚠︎ \(problem) — showing the last layout that read cleanly"
+    // MARK: - What is drawn
+
+    /// `viewFrames` draws `frame` and not `rect`, which is the same call the
+    /// drag overlay makes and for the same reason: the frame is the rectangle a
+    /// window dropped here is given, gap and margin included. An editor showing
+    /// a shape no window will ever be given is §3e back again, in the one place
+    /// where the drawing is not a preview of the product but the product.
+    private func boxes(of document: EditorDocument) -> [Box] {
+        let layout = document.layout
+        return layout.viewFrames(in: area).enumerated().map {
+            Box(rect: $1, name: layout.zones[$0].name)
         }
-        let zones = layout.zones.count == 1 ? "1 zone" : "\(layout.zones.count) zones"
+    }
+
+    /// The document as it would be if you clicked now.
+    ///
+    /// It is a whole candidate document and not two rectangles worked out by
+    /// hand, which is the point: the preview goes through the same `split` and
+    /// the same `viewFrames` as the real thing, so it cannot show you a
+    /// different answer from the one you are about to get. `EditorDocument` is
+    /// a value type precisely so this costs a copy and risks nothing.
+    private func candidate(for hover: Hover) -> EditorDocument? {
+        guard var document else { return nil }
+        guard document.split(rid: hover.rid, at: hover.fraction, hover.cut,
+                             minimum: minimumFraction(for: hover.cut)) else { return nil }
+        return document
+    }
+
+    private func minimumFraction(for cut: Cut) -> Double {
+        Self.smallestPiece / (cut == .vertical ? area.width : area.height)
+    }
+
+    private func updateHUD() {
+        guard let document else { return }
+        let zones = document.zones.count == 1 ? "1 zone" : "\(document.zones.count) zones"
         // The usable area, not the display's resolution, because that is what
         // the fractions are fractions of — and the difference between the two
         // numbers is the menu bar and the Dock, which is exactly the thing this
         // window is sitting below in order to show.
-        return "\(zones) · \(Int(area.width)) × \(Int(area.height)) usable · ⎋ to close"
+        hud.show(title: document.name,
+                 // A note displaces the status line rather than adding to it:
+                 // when the file is broken or has moved underneath you, that is
+                 // the only thing on this bar worth reading.
+                 hint: note ?? "\(zones) · \(Int(area.width)) × \(Int(area.height)) usable",
+                 keys: document.canUndo
+                     ? "Click to split · ⇧ rotates the cut · ⌘Z undo · ⎋ close"
+                     : "Click to split · ⇧ rotates the cut · ⎋ close")
+        layOutHUD()
+    }
+
+    // MARK: - The cursor
+
+    /// `.inVisibleRect` means the area follows the view's size, so this never
+    /// has to be redone by hand when a screen changes shape underneath it.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            // `.activeAlways` and not `.activeInKeyWindow`: the editor is a
+            // floating panel over other people's windows, and the cut line has
+            // to follow the cursor on the screen you are looking at whether or
+            // not you have clicked on it yet.
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self))
+    }
+
+    override func mouseMoved(with event: NSEvent) { cursorMoved(to: event) }
+    override func mouseDragged(with event: NSEvent) { cursorMoved(to: event) }
+    override func mouseEntered(with event: NSEvent) { cursorMoved(to: event) }
+
+    /// The cursor left this screen — most often for the other one, which has its
+    /// own window and its own hover. Leaving the line drawn here would put two
+    /// cut lines on the desk at once, only one of which a click would honour.
+    override func mouseExited(with event: NSEvent) {
+        cursor = nil
+        setHover(nil)
+    }
+
+    func modifiersChanged(to flags: NSEvent.ModifierFlags) {
+        shiftHeld = flags.contains(.shift)
+        recomputeHover()
+    }
+
+    private func cursorMoved(to event: NSEvent) {
+        cursor = convert(event.locationInWindow, from: nil)
+        shiftHeld = event.modifierFlags.contains(.shift)
+        recomputeHover()
+    }
+
+    private func recomputeHover() {
+        guard let document, let cursor else { return setHover(nil) }
+
+        let hits = document.layout.hitRects(in: area)
+        guard let index = Layout.smallestIndex(containing: cursor, in: hits) else {
+            return setHover(nil)
+        }
+        let rect = hits[index]
+        let cut = shiftHeld ? Cut.default(for: rect).rotated : Cut.default(for: rect)
+
+        // The cursor's coordinate along the axis being cut, expressed as a
+        // fraction of the usable area — which is what the document speaks. X is
+        // a straight scale; Y is measured from the top, because that is the end
+        // `Zone.y` counts from and this view counts from the other one.
+        let fraction = cut == .vertical
+            ? Double(cursor.x / area.width)
+            : Double(1 - cursor.y / area.height)
+
+        let line = cut == .vertical
+            ? CGRect(x: cursor.x, y: rect.minY, width: 0, height: rect.height)
+            : CGRect(x: rect.minX, y: cursor.y, width: rect.width, height: 0)
+
+        let candidate = Hover(rid: document.zones[index].rid, cut: cut,
+                              fraction: fraction, line: line)
+        // A cut that would leave a sliver is simply not offered. No line is the
+        // whole of the explanation, and it is a better one than a line that does
+        // nothing when clicked.
+        setHover(self.candidate(for: candidate) == nil ? nil : candidate)
+    }
+
+    private func setHover(_ new: Hover?) {
+        guard new != hover else { return }   // a mouseMoved that changes nothing draws nothing
+        hover = new
+        needsDisplay = true
+    }
+
+    // MARK: - The click
+
+    /// A click on an unfocused window normally only focuses it, and AppKit
+    /// swallows it. Here that means: leave the editor for another app, come
+    /// back, click a zone, and nothing happens — click again and it splits.
+    ///
+    /// It is the right default almost everywhere and wrong here, because the
+    /// cut line is already following the cursor while the window is unfocused
+    /// (the tracking area is `.activeAlways`). The user can *see* what the click
+    /// will do before making it, so swallowing it is pure loss: no surprise is
+    /// being prevented, and "the first click does nothing" is exactly the
+    /// did-that-work? confusion this editor exists to avoid.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownAt = convert(event.locationInWindow, from: nil)
+        cursorMoved(to: event)
+    }
+
+    /// The split happens on mouse **up**, and only if the cursor stayed put.
+    ///
+    /// A click and the beginning of a drag are the same `mouseDown`, and the
+    /// next stretch of this editor is dragging edges. Deciding on the way up,
+    /// against the same eight-point threshold the drag monitor already uses,
+    /// means that gesture can be added without taking this one apart.
+    override func mouseUp(with event: NSEvent) {
+        defer { mouseDownAt = nil }
+        let up = convert(event.locationInWindow, from: nil)
+        guard let down = mouseDownAt, hypot(up.x - down.x, up.y - down.y) < 8 else { return }
+        guard let hover else { return }
+
+        host?.onSplit?(hover.rid, hover.fraction, hover.cut, minimumFraction(for: hover.cut))
     }
 
     private func layOutHUD() {
@@ -319,7 +601,17 @@ final class EditorView: NSView {
         NSColor.black.withAlphaComponent(1 - Self.desktopBrightness).setFill()
         bounds.fill()
 
-        for box in boxes {
+        guard let document else { return }
+
+        // While a cut is being offered, **the whole screen shows the layout you
+        // would get**, not the one you have with a line drawn over it. §5's "the
+        // screen is the preview" taken at its word: the two pieces are named and
+        // measured where they will be, so there is nothing left to imagine and
+        // no second representation that could disagree with the first.
+        let previewing = hover.flatMap(candidate(for:))
+        let hovered = previewing ?? document
+
+        for box in boxes(of: hovered) {
             // **An outline and no fill**, which is where the drag overlay and
             // this part company, and it was measured rather than chosen.
             //
@@ -334,9 +626,6 @@ final class EditorView: NSView {
             // Which is the trap: zones tile the screen, so a per-zone fill is
             // not a highlight, it is a second scrim with the opposite sign, and
             // it undoes the most work exactly where the dimming matters most.
-            // The outline and the label are the whole of the information here.
-            // The fill comes back when there is something to single out — the
-            // zone under the cursor — and then it will be worth what it costs.
             let path = NSBezierPath(roundedRect: box.rect, xRadius: 14, yRadius: 14)
             NSColor.white.withAlphaComponent(0.55).setStroke()
             path.lineWidth = 2
@@ -344,6 +633,21 @@ final class EditorView: NSView {
 
             draw(box)
         }
+
+        if let hover, previewing != nil { draw(hover) }
+    }
+
+    /// The cut itself, drawn over the preview it produced.
+    ///
+    /// It is the accent colour for the same reason the drag overlay's active
+    /// zone is: in this app, accent means "this is what is about to happen".
+    private func draw(_ hover: Hover) {
+        let line = NSBezierPath()
+        line.move(to: CGPoint(x: hover.line.minX, y: hover.line.minY))
+        line.line(to: CGPoint(x: hover.line.maxX, y: hover.line.maxY))
+        line.lineWidth = 2
+        NSColor.controlAccentColor.setStroke()
+        line.stroke()
     }
 
     private func draw(_ box: Box) {
@@ -368,6 +672,13 @@ final class EditorView: NSView {
         let block = nameSize.height + 2 + sizeSize.height
         let top = box.rect.midY + block / 2
 
+        // A zone can be cut down to 40 points, at which point its own label is
+        // taller than it is. Drawing it anyway would put text across the
+        // neighbours, so a piece too small to say what it is says nothing —
+        // and the bar still names the layout.
+        guard box.rect.height > block + 8, box.rect.width > max(nameSize.width, sizeSize.width) + 8
+        else { return }
+
         name.draw(at: CGPoint(x: box.rect.midX - nameSize.width / 2, y: top - nameSize.height))
         size.draw(at: CGPoint(x: box.rect.midX - sizeSize.width / 2, y: top - block))
     }
@@ -384,6 +695,12 @@ final class EditorHUD: NSVisualEffectView {
 
     private let titleLabel = NSTextField(labelWithString: "")
     private let hintLabel = NSTextField(labelWithString: "")
+    /// §5's "contextual help line that changes with what you are touching", and
+    /// it is a line of its own rather than more words on the status line because
+    /// the two answer different questions — what you are looking at, and what
+    /// you can do to it. The direct antidote to FancyZones' discoverability
+    /// problem costs three labels.
+    private let keysLabel = NSTextField(labelWithString: "")
     private let doneButton = NSButton(title: "Done", target: nil, action: nil)
 
     init() {
@@ -407,10 +724,12 @@ final class EditorHUD: NSVisualEffectView {
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         hintLabel.font = .systemFont(ofSize: 11)
         hintLabel.textColor = .secondaryLabelColor
+        keysLabel.font = .systemFont(ofSize: 11)
+        keysLabel.textColor = .tertiaryLabelColor
 
         doneButton.bezelStyle = .rounded
 
-        let text = NSStackView(views: [titleLabel, hintLabel])
+        let text = NSStackView(views: [titleLabel, hintLabel, keysLabel])
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 1
@@ -441,9 +760,10 @@ final class EditorHUD: NSVisualEffectView {
         doneButton.action = #selector(EditorWindow.cancel(_:))
     }
 
-    func show(title: String, hint: String) {
+    func show(title: String, hint: String, keys: String) {
         titleLabel.stringValue = title
         hintLabel.stringValue = hint
+        keysLabel.stringValue = keys
         needsLayout = true
     }
 }
