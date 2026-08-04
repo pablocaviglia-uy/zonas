@@ -7,6 +7,39 @@ import Foundation
 /// invisible when you make it.
 enum LayoutFile {
 
+    /// Where the file lives when nobody says otherwise.
+    ///
+    /// It is a `static` and not a property of the store on purpose: everything
+    /// that reads or writes the layout takes a URL, so a test can point the
+    /// whole thing at a directory of its own. While this was baked into the
+    /// store's initializer there was no way to exercise the file handling at all
+    /// without touching the real config of whoever ran the tests.
+    ///
+    /// This one line is also the entire surface the XDG work has to replace.
+    static let defaultURL: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask)[0]
+        return base.appendingPathComponent("Zonas/layout.json")
+    }()
+
+    /// Reads the layout. `nil` means there is nothing usable here.
+    ///
+    /// What the caller does about it is the caller's business — at startup it
+    /// means the built-in layout, on a reload it means keeping what was already
+    /// working — but the **reason** is always in the log. The `try?`s that used
+    /// to be here swallowed it, and one comma too many looked exactly like
+    /// having no file at all.
+    static func read(_ url: URL) -> Layout? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        do {
+            return try JSONDecoder().decode(Layout.self, from: Data(contentsOf: url))
+        } catch {
+            Log.write("layout: FAILED to read \(url.path) — \(error)")
+            Log.write("layout: the file is NOT touched")
+            return nil
+        }
+    }
+
     /// Writes the file atomically, **without destroying a symlink**.
     ///
     /// Two things have to be true at once and only one of them is intuitive.

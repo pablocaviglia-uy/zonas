@@ -187,7 +187,7 @@ final class DragMonitor {
             return
         }
         let area = screen.cgVisibleFrame
-        guard let target = ZoneStore.shared.zone(under: event.location, in: area) else {
+        guard let target = ZoneStore.shared.layout.zone(under: event.location, in: area) else {
             Log.write("drop: the cursor didn't land inside any zone")
             return
         }

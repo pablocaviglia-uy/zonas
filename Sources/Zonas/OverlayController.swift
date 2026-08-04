@@ -19,7 +19,7 @@ final class OverlayController {
         currentScreen = screen
 
         let area = screen.cgVisibleFrame
-        let active = ZoneStore.shared.zone(under: point, in: area)?.rect
+        let active = ZoneStore.shared.layout.zone(under: point, in: area)?.rect
 
         let window = window(for: screen)
         guard let view = window.contentView as? ZoneOverlayView else { return }
