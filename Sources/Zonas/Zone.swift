@@ -100,18 +100,23 @@ final class ZoneStore {
     /// the next login, when nobody is watching any more.
     func createIfMissing() {
         guard !FileManager.default.fileExists(atPath: url.path) else { return }
-        save()
+        do {
+            try save()
+        } catch {
+            Log.write("layout: FAILED to create \(url.path) — \(error)")
+        }
     }
 
     /// Writes the current layout, creating the folder if needed.
-    @discardableResult
-    func save() -> Bool {
+    ///
+    /// It throws rather than returning a `Bool` because the only caller used to
+    /// discard that `Bool`: a read-only config folder, a full disk or a wrong
+    /// permission all ended the same way, with the app carrying on in silence.
+    /// An error that reaches the log at least names itself.
+    func save() throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(layout) else { return false }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                 withIntermediateDirectories: true)
-        return (try? data.write(to: url)) != nil
+        try LayoutFile.write(encoder.encode(layout), to: url)
     }
 
     func reload() {
