@@ -445,7 +445,7 @@ it rewrites on every launch.
 > | 1 | The window: one per screen, dimmed desktop, zones drawn, **no editing** | **done** |
 > | 2 | Click to split, ⇧ rotates the axis, hover preview, ⌘Z | **done** |
 > | 3 | Edge dragging with collinear coalescence, ⌥ to break it | **done** |
-> | 4 | Rational snapping, px+fraction labels, delete | |
+> | 4 | Rational snapping, px+fraction labels, delete | **done** |
 > | 5 | The write path through `LayoutSyntax`, undo, conflict banner | |
 >
 > **Stretch 1 offering no editing was the point, not a shortfall.** Everything
@@ -604,6 +604,49 @@ the way up; the preview during the drag runs against a copy. Four drags, four
 a drag and the line shrinks to one side under your hand. And the cursor turning
 into a resize arrow is the only thing that tells a divider you can hold from a
 cut you can make — both are otherwise an accent line under the pointer.
+
+### What stretch 4 established
+
+**The grid is exactly the file's vocabulary, and that is the whole design.**
+`LayoutSchema.fraction` reads `"1/3"` as `Double(1) / Double(3)`, and
+`Fraction` produces the same expression, so a value dragged into place and a
+value read off disk are the same bits. A grid that did not line up with the
+format would put `0.3333333333333333` into somebody's dotfiles and the thesis
+with it. There is a test that walks every fraction in the grid against what the
+parser would produce for the same string.
+
+**⌥ means "no assistance", and carries both jobs.** It breaks the coalescence
+*and* turns the grid off. They belong together — everything else in the editor
+is trying to help you land on a number worth writing down, and ⌥ is how you say
+you had something else in mind. The cost is that "coalesced but off the grid"
+is unreachable; that is the weakest of the four combinations and the numeric
+panel (§5, not in the narrow editor) is where it would belong.
+
+**§5's delete rule does not work as written.** "The neighbour sharing the
+longest edge" compares a fraction of the screen's height against a fraction of
+its width, which needs an aspect ratio — and supplying one does not rescue it:
+deleting the top-left zone of this desk's layout offers 1280 points of shared
+edge against 720 on the ultrawide, and 432 against 542 on the laptop. The same
+delete would absorb into a different neighbour depending on the monitor, for one
+layout drawn on both. The rule is now **whether the neighbour lines up with the
+victim along the shared edge**, which compares like with like, gives the same
+answer on every screen, and picks the zone in the same column or row — the one
+anybody would point at. Longest shared edge is the tie-break, file order after
+that.
+
+**And §5's "click a zone and press ⌫" has nothing to select with**, because a
+click already means "split here". ⌫ acts on the zone under the cursor, which is
+the rule the rest of the editor already follows. The ✕ takes priority inside its
+own rectangle — an explicit control beats an implicit band — which it has to,
+because it lives in a corner and corners are edge-grab territory. The third way
+§5 lists, dragging a divider onto its neighbour to collapse the zone between,
+is **not implemented**: it fights the clamp, and it needs a visual language for
+"this is about to vanish" that nothing else here has yet.
+
+A delete can leave a hole, and it is allowed rather than prevented. Zones are
+not required to tile, a hole is dimmed desktop with no outline and therefore
+visible the instant it appears, and you close it by dragging. Refusing the
+delete instead would let the editor into states it could not get out of.
 
 Estimate: 400–600 lines of AppKit on a base that already knows half of it.
 
