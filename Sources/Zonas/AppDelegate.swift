@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var statusItem: NSStatusItem?
     private var launchAtLoginItem: NSMenuItem?
     private var modifierHintItem: NSMenuItem?
+    private var problemItem: NSMenuItem?
     private var permissionWatchdog: Timer?
     private var layoutWatcher: LayoutWatcher?
     private let monitor = DragMonitor()
@@ -37,12 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// the thing to reach for when you want to know whether the file is being
     /// read at all.
     private func startWatchingTheLayout() {
-        // No file to follow means the location was ambiguous, which is already
-        // in the log with both paths in it. Watching nothing is the right amount
-        // of work to do about it.
-        guard let url = LayoutStore.shared.fileURL else { return }
-
-        let watcher = LayoutWatcher(url: url) {
+        let url = LayoutStore.shared.fileURL
+        let watcher = LayoutWatcher(url: url) { [weak self] in
             switch LayoutStore.shared.reload() {
             case .changed:
                 // The settings are in the line because changing only `gap` is a
@@ -57,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 // that broke the file already logged why, with the line number.
                 break
             }
+            self?.showProblem(LayoutStore.shared.problem)
         }
         watcher.start()
         layoutWatcher = watcher
@@ -152,6 +150,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let hint = NSMenuItem(title: modifierHint, action: nil, keyEquivalent: "")
         modifierHintItem = hint
         menu.addItem(hint)
+
+        // Hidden unless the file is broken. It is above the separator, where the
+        // eye goes first, and clicking it opens the file at the problem rather
+        // than opening the log and making you find it.
+        let problem = ownItem("", #selector(openLayout))
+        problem.isHidden = true
+        problemItem = problem
+        menu.addItem(problem)
+
         menu.addItem(.separator())
         menu.addItem(ownItem("Edit Zones…", #selector(openLayout)))
         menu.addItem(ownItem("Reload Zones", #selector(reloadLayout), key: "r"))
@@ -186,15 +193,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     @objc private func openLayout() {
-        guard let url = LayoutStore.shared.fileURL else {
-            NSWorkspace.shared.open(Log.url)   // the log says which files clash
-            return
-        }
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(LayoutStore.shared.fileURL)
     }
 
+    /// Here an alert **is** right, and the difference is who asked.
+    ///
+    /// The watcher reloads because you saved, so it reports by changing the icon
+    /// and gets out of the way. You picking "Reload Zones" is a question, and a
+    /// question deserves an answer — silence would leave you unable to tell a
+    /// successful reload from a menu item that does nothing.
     @objc private func reloadLayout() {
-        LayoutStore.shared.reload()
+        switch LayoutStore.shared.reload() {
+        case .changed, .unchanged:
+            showProblem(nil)
+        case .failed:
+            showProblem(LayoutStore.shared.problem)
+            let alert = NSAlert()
+            alert.messageText = "That layout file cannot be read"
+            alert.informativeText = (LayoutStore.shared.problem ?? "")
+                + "\n\nThe zones you were using are still in place, and the file "
+                + "has not been touched."
+            // An .accessory app gets a generic icon in its own alerts unless it
+            // is told otherwise, which makes the dialog look like it belongs to
+            // no application at all.
+            alert.icon = NSApp.applicationIconImage
+            alert.addButton(withTitle: "Edit the File")
+            alert.addButton(withTitle: "Later")
+
+            NSApp.activate(ignoringOtherApps: true)
+            if alert.runModal() == .alertFirstButtonReturn { openLayout() }
+        }
     }
 
     @objc private func openLog() {
@@ -213,6 +241,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // The modifier comes from the file and the file can change under us, so
         // the reminder is re-read rather than baked in when the menu was built.
         modifierHintItem?.title = modifierHint
+        showProblem(LayoutStore.shared.problem)
+    }
+
+    /// Puts what is wrong with the file where somebody will see it.
+    ///
+    /// Not an alert. You break the file by saving it half-edited, which happens
+    /// several times a minute while you are working on it, and a modal dialog
+    /// every time would make the live reload unbearable — it would be the app
+    /// interrupting you to report something you already know and are in the
+    /// middle of fixing. The menu bar icon and one line in the menu are loud
+    /// enough to notice and quiet enough to ignore.
+    private func showProblem(_ problem: String?) {
+        problemItem?.isHidden = problem == nil
+        problemItem?.title = problem.map { "⚠︎ \($0)" } ?? ""
+
+        // The icon changes shape, not just colour: on a busy menu bar a
+        // recoloured glyph at 16 points is not something anybody notices.
+        statusItem?.button?.image = NSImage(
+            systemSymbolName: problem == nil ? "rectangle.split.3x1" : "exclamationmark.triangle",
+            accessibilityDescription: problem == nil ? "Zonas" : "Zonas: the layout file has an error")
     }
 
     private var modifierHint: String {

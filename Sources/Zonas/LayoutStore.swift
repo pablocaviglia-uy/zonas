@@ -17,20 +17,34 @@ final class LayoutStore {
     /// The instance the app uses. Everything else takes a URL.
     static let shared = LayoutStore(url: LayoutFile.defaultURL())
 
-    /// `nil` when the config location is ambiguous — two files, no way to pick.
-    /// Everything still works, on the built-in layout, and the log says why.
-    private let url: URL?
+    private let url: URL
     private(set) var layout: Layout
 
-    init(url: URL?) {
+    /// What is wrong with the file right now, in the user's words, or `nil`.
+    ///
+    /// The store keeps it so that the menu can say which line to go and look at.
+    /// While the log was the only audience an error had, swallowing it there was
+    /// enough; a menu bar item that says "the file is broken" and nothing else
+    /// is only marginally better than silence.
+    private(set) var problem: String?
+
+    init(url: URL) {
         self.url = url
         // At startup there is no last good layout to keep, so the built-in one
         // is the only answer. That is not the same decision as `reload()`'s.
-        layout = url.flatMap(LayoutFile.read) ?? .threeColumns
+        do {
+            layout = try LayoutFile.load(url)
+        } catch is LayoutFile.Missing {
+            layout = .threeColumns
+        } catch {
+            layout = .threeColumns
+            problem = "\(error)"
+            Log.write("layout: FAILED to read \(url.path) — \(error)")
+        }
     }
 
     /// Path of the file, so it can be opened from the menu.
-    var fileURL: URL? { url }
+    var fileURL: URL { url }
 
     /// Writes the starting file, only if there is no file yet.
     ///
@@ -43,7 +57,6 @@ final class LayoutStore {
     /// it — and not the encoded layout. The error is only logged because there
     /// is no window to put it in yet; the first-launch window is Stage 2.
     func createIfMissing() {
-        guard let url else { return }
         guard !FileManager.default.fileExists(atPath: url.path) else { return }
         do {
             try LayoutFile.write(Data(LayoutFile.seed.utf8), to: url)
@@ -76,10 +89,22 @@ final class LayoutStore {
     /// while the file is broken.
     @discardableResult
     func reload() -> Reload {
-        guard let url, let fresh = LayoutFile.read(url) else { return .failed }
-        guard fresh != layout else { return .unchanged }
-        layout = fresh
-        return .changed
+        do {
+            let fresh = try LayoutFile.load(url)
+            // Recovering is a state transition and belongs in the log. Without
+            // it, reading the log later shows a FAILED with no resolution after
+            // it, which reads as still broken.
+            if problem != nil { Log.write("layout: reads fine again") }
+            problem = nil
+            guard fresh != layout else { return .unchanged }
+            layout = fresh
+            return .changed
+        } catch {
+            problem = "\(error)"
+            Log.write("layout: FAILED to read \(url.path) — \(error)")
+            Log.write("layout: the file is NOT touched")
+            return .failed
+        }
     }
 
     /// What a reload turned out to be.

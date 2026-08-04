@@ -7,125 +7,119 @@ struct LayoutLocationTests {
 
     private let home = URL(fileURLWithPath: "/Users/someone", isDirectory: true)
 
-    @Test("With no XDG_CONFIG_HOME it is ~/.config/zonas/zonas.json5")
-    func theDefault() {
-        let location = LayoutLocation(environment: [:], home: home)
+    @Test("There is one path, and it is ~/.config/zonas/zonas.json5")
+    func theOnePath() {
+        let location = LayoutLocation(home: home)
 
-        #expect(location.preferred.path == "/Users/someone/.config/zonas/zonas.json5")
-        #expect(location.candidates.count == 1)
-    }
-
-    @Test("XDG_CONFIG_HOME is honoured")
-    func xdgIsHonoured() {
-        let location = LayoutLocation(environment: ["XDG_CONFIG_HOME": "/Users/someone/cfg"],
-                                      home: home)
-
-        #expect(location.preferred.path == "/Users/someone/cfg/zonas/zonas.json5")
-    }
-
-    /// The spec says to ignore a relative value, and honouring one silently
-    /// would be a way to write a file somewhere surprising.
-    @Test("A relative or empty XDG_CONFIG_HOME is ignored")
-    func nonsenseXDGIsIgnored() {
-        for value in ["", "../..", "cfg", " "] {
-            let location = LayoutLocation(environment: ["XDG_CONFIG_HOME": value], home: home)
-
-            #expect(location.preferred.path == "/Users/someone/.config/zonas/zonas.json5",
-                    "XDG_CONFIG_HOME=\(value) was taken seriously")
-        }
-    }
-
-    /// Setting XDG_CONFIG_HOME after having created ~/.config/zonas is the case
-    /// this exists for: two files, and one of them about to be ignored.
-    @Test("Setting XDG_CONFIG_HOME elsewhere means two places to look")
-    func twoCandidates() {
-        let location = LayoutLocation(environment: ["XDG_CONFIG_HOME": "/Users/someone/cfg"],
-                                      home: home)
-
-        #expect(location.candidates.map(\.path) == [
-            "/Users/someone/cfg/zonas/zonas.json5",
-            "/Users/someone/.config/zonas/zonas.json5",
-        ])
-    }
-
-    @Test("XDG_CONFIG_HOME pointing at ~/.config is not two places")
-    func xdgPointingAtTheDefault() {
-        let location = LayoutLocation(environment: ["XDG_CONFIG_HOME": "/Users/someone/.config"],
-                                      home: home)
-
-        #expect(location.candidates.count == 1)
+        #expect(location.url.path == "/Users/someone/.config/zonas/zonas.json5")
     }
 
     @Test("The pre-1.0 file is where it always was")
     func legacyPath() {
-        let location = LayoutLocation(environment: [:], home: home)
+        let location = LayoutLocation(home: home)
 
         #expect(location.legacy.path
                 == "/Users/someone/Library/Application Support/Zonas/layout.json")
     }
+
+    /// `$XDG_CONFIG_HOME` was honoured for about an hour, and then removed after
+    /// running it. A GUI app on macOS is launched by Finder or by launchd and
+    /// never sees a shell's exports, so the app would read `~/.config` while
+    /// `zonas check` in a terminal read somewhere else — silently, with only one
+    /// of the two files existing, so no amount of checking for duplicates could
+    /// catch it.
+    ///
+    /// The supported way to keep the file elsewhere is a symlink, which is
+    /// resolved by the filesystem rather than by an environment the app and the
+    /// terminal do not share.
+    @Test("The environment cannot move it, because the app cannot read the environment")
+    func theEnvironmentIsIgnored() {
+        let plain = LayoutLocation(home: home)
+
+        setenv("XDG_CONFIG_HOME", "/Users/someone/somewhere-else", 1)
+        defer { unsetenv("XDG_CONFIG_HOME") }
+
+        #expect(LayoutLocation(home: home).url == plain.url)
+    }
+
+    /// And a symlink is: the file handling resolves them, the writer keeps them
+    /// intact, and the watcher follows them. That is what makes it a real answer
+    /// rather than a consolation.
+    @Test("A symlinked config is read through the link")
+    func aSymlinkedConfigIsRead() throws {
+        try inTemporaryDirectory { dir in
+            let repo = dir.appendingPathComponent("dotfiles", isDirectory: true)
+            try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+            let real = repo.appendingPathComponent("zonas.json5")
+            try write(#"{ name: "From the repo", zones: [ { name: "All", x: 0, y: 0, width: 1, height: 1 } ] }"#,
+                      to: real)
+
+            let location = LayoutLocation(home: dir)
+            try FileManager.default.createDirectory(at: location.url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(at: location.url, withDestinationURL: real)
+
+            let store = LayoutStore(url: location.url)
+
+            #expect(store.layout.name == "From the repo")
+        }
+    }
 }
 
-@Suite("Refusing to guess between two config files")
-struct LayoutAmbiguityTests {
+@Suite("Telling the app what is wrong with the file")
+struct LayoutProblemTests {
 
-    @Test("With nothing on disk, it resolves to where a new one would go")
-    func nothingYet() throws {
+    @Test("A file that reads leaves no problem to report")
+    func nothingToReport() throws {
         try inTemporaryDirectory { dir in
-            let location = LayoutLocation(environment: [:], home: dir)
+            let url = dir.appendingPathComponent("zonas.json5")
+            try write(#"{ name: "Fine", zones: [ { name: "All", x: 0, y: 0, width: 1, height: 1 } ] }"#,
+                      to: url)
 
-            let resolved = try location.resolve()
-            #expect(resolved == location.preferred)
+            #expect(LayoutStore(url: url).problem == nil)
         }
     }
 
-    @Test("With one file, that is the one")
-    func exactlyOne() throws {
+    /// The menu has to be able to name the line, so the store keeps the reason
+    /// rather than dropping it into the log on the way past.
+    @Test("A broken file leaves a problem that names the line")
+    func aproblemIsKept() throws {
         try inTemporaryDirectory { dir in
-            let location = LayoutLocation(environment: ["XDG_CONFIG_HOME": dir.path + "/cfg"],
-                                          home: dir)
-            try write("{}", to: location.candidates[0])
+            let url = dir.appendingPathComponent("zonas.json5")
+            try write(#"{ name: "Fine", zones: [ { name: "A", x: 0, y: 0, width: "half", height: 1 } ] }"#,
+                      to: url)
 
-            let resolved = try location.resolve()
-            #expect(resolved == location.candidates[0])
-        }
-    }
+            let store = LayoutStore(url: url)
 
-    /// Reading the first would mean silently ignoring a file the user wrote —
-    /// and editing the ignored one looks exactly like the app being broken: you
-    /// save, nothing happens, and nothing on screen explains it.
-    @Test("With two files it refuses, and names both")
-    func twoFiles() throws {
-        try inTemporaryDirectory { dir in
-            let location = LayoutLocation(environment: ["XDG_CONFIG_HOME": dir.path + "/cfg"],
-                                          home: dir)
-            try write("{}", to: location.candidates[0])
-            try write("{}", to: location.candidates[1])
-
-            let problem = #expect(throws: LayoutLocation.Ambiguous.self) {
-                try location.resolve()
-            }
-
-            #expect(problem?.paths.count == 2)
-            #expect(problem?.description.contains(location.candidates[0].path) == true)
-            #expect(problem?.description.contains(location.candidates[1].path) == true)
-        }
-    }
-
-    /// Ambiguity is not a crash. The app runs on the built-in layout and the log
-    /// carries both paths.
-    @Test("An ambiguous location leaves the app on the built-in layout")
-    func ambiguityIsSurvivable() throws {
-        try inTemporaryDirectory { dir in
-            let location = LayoutLocation(environment: ["XDG_CONFIG_HOME": dir.path + "/cfg"],
-                                          home: dir)
-            try write("{}", to: location.candidates[0])
-            try write("{}", to: location.candidates[1])
-
-            let store = LayoutStore(url: LayoutFile.defaultURL(location))
-
-            #expect(store.fileURL == nil)
+            #expect(store.problem?.hasPrefix("line 1:") == true)
             #expect(store.layout == .threeColumns)
-            #expect(store.reload() == .failed)
+        }
+    }
+
+    @Test("Fixing the file clears it again")
+    func fixingItClearsTheProblem() throws {
+        try inTemporaryDirectory { dir in
+            let url = dir.appendingPathComponent("zonas.json5")
+            try write("{ name: \"Fine\", zones: [ ,, ] }", to: url)
+            let store = LayoutStore(url: url)
+            #expect(store.problem != nil)
+
+            try write(#"{ name: "Fixed", zones: [ { name: "All", x: 0, y: 0, width: 1, height: 1 } ] }"#,
+                      to: url)
+
+            #expect(store.reload() == .changed)
+            #expect(store.problem == nil)
+        }
+    }
+
+    /// No file at all is a first launch, not a problem to shout about.
+    @Test("A missing file is not an error")
+    func amissingFileIsNotAProblem() throws {
+        try inTemporaryDirectory { dir in
+            let store = LayoutStore(url: dir.appendingPathComponent("nothing.json5"))
+
+            #expect(store.problem == nil)
+            #expect(store.layout == .threeColumns)
         }
     }
 }

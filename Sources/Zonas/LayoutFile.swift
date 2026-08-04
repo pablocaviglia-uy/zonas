@@ -15,18 +15,9 @@ enum LayoutFile {
     /// work out where the file should be, bring a pre-1.0 one across if there is
     /// one, and hand back the path.
     ///
-    /// When the location is ambiguous it says so and falls back to the built-in
-    /// layout rather than picking one of two files the user wrote.
-    static func defaultURL(_ location: LayoutLocation = LayoutLocation()) -> URL? {
-        do {
-            let url = try location.resolve()
-            LayoutMigration.migrateIfNeeded(from: location.legacy, to: url)
-            return url
-        } catch {
-            Log.write("layout: \(error)")
-            Log.write("layout: using the built-in layout until that is sorted out")
-            return nil
-        }
+    static func defaultURL(_ location: LayoutLocation = LayoutLocation()) -> URL {
+        LayoutMigration.migrateIfNeeded(from: location.legacy, to: location.url)
+        return location.url
     }
 
     /// What gets written on the very first launch.
@@ -110,17 +101,34 @@ enum LayoutFile {
     /// offset into the data, which nobody has ever managed to find in their own
     /// config file.
     static func read(_ url: URL) -> Layout? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         do {
-            let text = try String(contentsOf: url, encoding: .utf8)
-            let document = try LayoutSyntax.parse(text)
-            try Layout.checkVersion(document)
-            return try Layout(document)
+            return try load(url)
+        } catch is Missing {
+            return nil
         } catch {
             Log.write("layout: FAILED to read \(url.path) — \(error)")
             Log.write("layout: the file is NOT touched")
             return nil
         }
+    }
+
+    /// The same, keeping the reason.
+    ///
+    /// The menu has to be able to say *what* is wrong, and `zonas check` has to
+    /// print it. Swallowing the error into the log was fine while the log was
+    /// the only audience it had.
+    static func load(_ url: URL) throws -> Layout {
+        guard FileManager.default.fileExists(atPath: url.path) else { throw Missing() }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let document = try LayoutSyntax.parse(text)
+        try Layout.checkVersion(document)
+        return try Layout(document)
+    }
+
+    /// There is no file. Told apart from a file that is there and wrong, because
+    /// the first is what a first launch looks like and the second is a problem.
+    struct Missing: Error, CustomStringConvertible {
+        var description: String { "there is no layout file yet" }
     }
 
     /// Writes the file atomically, **without destroying a symlink**.

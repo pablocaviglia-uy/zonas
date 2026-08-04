@@ -238,6 +238,40 @@ Edit the file and pick **Reload Zones** from the menu bar. Notes:
   what makes a layout with one big background zone and smaller ones on top of
   it usable.
 
+## From the command line
+
+The app and the command line are the same binary. With arguments it answers and
+exits without ever starting the menu bar app:
+
+```bash
+/Applications/Zonas.app/Contents/MacOS/Zonas check
+```
+
+| Command | What it does |
+|---|---|
+| `check [file]` | Reads the layout and says what is wrong with it, with the line number. Exit 1 on an error, 0 on a warning. |
+| `fmt [file]` | Rewrites the file in canonical form — aligned columns, comments kept. |
+| `fmt [file] --check` | Says whether it would rewrite it, and changes nothing. Exit 1 if it would. |
+| `monitors` | Name, size and display ID of every screen you have plugged in. |
+| `version`, `help` | |
+
+Give `check` and `fmt` a path to work on a file other than the installed one —
+which is what you want in the CI of a dotfiles repo, where nothing is installed:
+
+```bash
+Zonas check ~/dotfiles/config/zonas/zonas.json5
+```
+
+`fmt` runs Zonas' own comment-conservation check before it writes, and refuses
+to write at all if reformatting would lose a single comment you typed.
+
+**`$XDG_CONFIG_HOME` is deliberately not honoured.** A GUI app on macOS is
+launched by Finder or launchd and never sees your shell's exports, so the app
+would read `~/.config` while `zonas check` in a terminal read somewhere else —
+silently, with only one of the two files existing. Symlink the file instead:
+that is resolved by the filesystem, so the app and the command line agree, and
+Zonas writes through symlinks without replacing them.
+
 ## Development signing
 
 **Do this before your first build.** Without your own certificate, the

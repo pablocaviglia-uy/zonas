@@ -16,29 +16,41 @@ import Foundation
 /// `Application Support` directory in it. `~/.config` is where the tools this
 /// competes with already look.
 ///
-/// Everything here takes its environment as a parameter rather than reading the
-/// process's, so a test can describe a machine instead of running on one.
+/// ### Why `$XDG_CONFIG_HOME` is deliberately not honoured
+///
+/// This was written honouring it, and then reverted after running it, which is
+/// the only reason the problem was found: **a GUI app on macOS cannot see your
+/// shell's environment.** It is launched by Finder or by launchd, neither of
+/// which has ever sourced your `.zshrc`. So for anybody who sets the variable to
+/// something other than `~/.config`:
+///
+/// - the app, which cannot see it, reads `~/.config/zonas/zonas.json5`
+/// - `zonas check` in a terminal, which can, reads somewhere else entirely
+///
+/// They disagree about which file is your config, silently, and no amount of
+/// checking for two files catches it because only one of them exists. "You save
+/// and nothing happens" is precisely the failure this project keeps eliminating,
+/// and honouring the variable would build one in on purpose.
+///
+/// The supported way to keep the file elsewhere is a **symlink**, which works
+/// identically for the app and for the command line because it is resolved by
+/// the filesystem rather than by an environment neither of them shares. That is
+/// not a consolation prize: writing through a symlink without destroying it, and
+/// watching both the link and its target, are already done and tested.
 struct LayoutLocation {
 
-    private let configHome: URL?
     private let home: URL
 
-    init(environment: [String: String] = ProcessInfo.processInfo.environment,
-         home: URL = FileManager.default.homeDirectoryForCurrentUser) {
-        // An XDG_CONFIG_HOME that is empty or relative is not a config home.
-        // The spec says to ignore it, and silently honouring `../..` would be a
-        // way to write a file somewhere surprising.
-        if let raw = environment["XDG_CONFIG_HOME"], raw.hasPrefix("/") {
-            configHome = URL(fileURLWithPath: raw, isDirectory: true)
-        } else {
-            configHome = nil
-        }
+    init(home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.home = home
     }
 
-    /// Where a new file gets created.
-    var preferred: URL {
-        directory(under: configHome ?? home.appendingPathComponent(".config", isDirectory: true))
+    /// The layout file. There is one path and it is this one.
+    var url: URL {
+        home
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("zonas", isDirectory: true)
+            .appendingPathComponent("zonas.json5")
     }
 
     /// The pre-1.0 location, which is read once and then left alone forever.
@@ -46,55 +58,5 @@ struct LayoutLocation {
         home
             .appendingPathComponent("Library/Application Support/Zonas", isDirectory: true)
             .appendingPathComponent("layout.json")
-    }
-
-    /// Every place a config could legitimately be, most specific first.
-    ///
-    /// There are two only when `XDG_CONFIG_HOME` is set to something that is not
-    /// `~/.config`, which is exactly the case that needs care: somebody who set
-    /// that variable *after* creating `~/.config/zonas/` has two files and one
-    /// of them is about to be ignored.
-    var candidates: [URL] {
-        var directories = [configHome ?? home.appendingPathComponent(".config", isDirectory: true)]
-        let dotConfig = home.appendingPathComponent(".config", isDirectory: true)
-        if directories[0].standardizedFileURL != dotConfig.standardizedFileURL {
-            directories.append(dotConfig)
-        }
-        return directories.map(directory(under:))
-    }
-
-    private func directory(under base: URL) -> URL {
-        base
-            .appendingPathComponent("zonas", isDirectory: true)
-            .appendingPathComponent("zonas.json5")
-    }
-
-    /// The file to read, or a refusal to guess.
-    ///
-    /// When two candidates both exist there is no defensible way to pick one.
-    /// Reading the first would mean silently ignoring a file the user wrote, and
-    /// editing the ignored one would look exactly like the app being broken —
-    /// you save, nothing happens, and there is nothing on screen to explain it.
-    /// So it says so, names both paths, and reads neither.
-    ///
-    /// - Returns: the existing file, or `preferred` when there is none yet.
-    func resolve(using fileManager: FileManager = .default) throws -> URL {
-        let existing = candidates.filter { fileManager.fileExists(atPath: $0.path) }
-
-        guard existing.count <= 1 else {
-            throw Ambiguous(paths: existing)
-        }
-        return existing.first ?? preferred
-    }
-
-    /// Two config files, and no way to choose.
-    struct Ambiguous: Error, CustomStringConvertible {
-        let paths: [URL]
-
-        var description: String {
-            "there is more than one config file and no way to tell which you meant:\n"
-                + paths.map { "         \($0.path)" }.joined(separator: "\n")
-                + "\n         delete or rename one of them"
-        }
     }
 }

@@ -596,8 +596,19 @@ calendar week. **Every stage ships on its own.**
 | `LayoutFile` + `LayoutWatcher` (two sources, retry, symlinks) + `LayoutStore` `@MainActor` | 1.5 | **done**, except `@MainActor` |
 | Migration `layout.json` v0 → `zonas.json5` v1 with backup; XDG paths with an ambiguity error | 1 | **done** |
 | `gap`/`margin`/`modifier` actually honoured (fixes the lying preview) | 0.5 | **done** |
-| Icon in alerts + `zonas check` / `fmt` / `monitors` | 0.5 | |
+| Icon in alerts + `zonas check` / `fmt` / `monitors` | 0.5 | **done** |
 | README split into user and contributor + demo GIF | 0.5 | reframed to lead with the file; split and GIF pending |
+
+**`$XDG_CONFIG_HOME` was implemented and then removed**, which is the only
+reason the problem was found. A GUI app on macOS is launched by Finder or
+launchd and never sees a shell's exports, so honouring the variable means the
+app reads `~/.config` while `zonas check` in a terminal reads somewhere else —
+silently, and with only one of the two files existing, so the ambiguity error
+this piece was supposed to ship cannot catch it. The supported answer for
+keeping the file elsewhere is a symlink, which is resolved by the filesystem
+rather than by an environment the two do not share, and which the writer and the
+watcher already handle properly. The ambiguity error went with it: it existed to
+guard a hazard that no longer exists.
 
 **v1 is flat, and that was a decision.** §4's example shows
 `version`/`defaults`/`layouts`/`screens`, but `layouts[]` belongs to Stage 3 and
