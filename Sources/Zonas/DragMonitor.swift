@@ -33,6 +33,15 @@ final class DragMonitor {
     private var isDragging = false
     private var isOverlayVisible = false
 
+    /// The layout this drag is working against, frozen when the drag begins.
+    ///
+    /// A gesture lasts seconds; saving the file takes none. Asking the store
+    /// again on every event would let the zones drawn during the drag and the
+    /// zone chosen on the drop come from two different versions of the file, and
+    /// the user would have no way of telling that is what happened — the window
+    /// just lands somewhere else than where the highlight was.
+    private var snapshot: Layout?
+
     private let overlay = OverlayController()
 
     // MARK: - Lifecycle
@@ -139,6 +148,9 @@ final class DragMonitor {
             let distance = hypot(current.x - start.x, current.y - start.y)
             guard distance >= dragThreshold else { return }
             isDragging = true
+            // The layout is taken here, once, and everything from here to the
+            // drop reads this copy.
+            snapshot = ZoneStore.shared.layout
             // The window is looked up under the starting point, not the current
             // one: by the time the threshold is crossed the cursor may already
             // be over a different one.
@@ -153,9 +165,10 @@ final class DragMonitor {
         // problem is in the identification; if nothing appears at all, the
         // problem is earlier, in the tap or in the modifier.
         if event.flags.contains(Self.modifier) {
-            guard let screen = NSScreen.containing(cgPoint: current) else { return }
-            if !isOverlayVisible { Log.write("overlay: showing zones") }
-            overlay.show(cursor: current, on: screen)
+            guard let layout = snapshot,
+                  let screen = NSScreen.containing(cgPoint: current) else { return }
+            if !isOverlayVisible { Log.write("overlay: showing zones of \"\(layout.name)\"") }
+            overlay.show(layout, cursor: current, on: screen)
             isOverlayVisible = true
         } else if isOverlayVisible {
             overlay.hide()
@@ -174,6 +187,7 @@ final class DragMonitor {
             isDragging = false
             startPoint = nil
             draggedWindow = nil
+            snapshot = nil
         }
 
         guard isOverlayVisible else { return }
@@ -182,12 +196,14 @@ final class DragMonitor {
             Log.write("drop: there was a zone but no window to move")
             return
         }
+        // The same layout that was drawn, not whatever is in the store now.
+        guard let layout = snapshot else { return }
         guard let screen = NSScreen.containing(cgPoint: event.location) else {
             Log.write("drop: the cursor didn't land on any screen")
             return
         }
         let area = screen.cgVisibleFrame
-        guard let target = ZoneStore.shared.layout.zone(under: event.location, in: area) else {
+        guard let target = layout.zone(under: event.location, in: area) else {
             Log.write("drop: the cursor didn't land inside any zone")
             return
         }

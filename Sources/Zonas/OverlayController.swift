@@ -9,20 +9,43 @@ final class OverlayController {
     private var windows: [NSScreen: NSWindow] = [:]
     private var currentScreen: NSScreen?
 
-    /// Shows the zones of one screen and highlights the one under the cursor.
+    /// What is on screen right now, so that an event that changes nothing does
+    /// nothing. See `show(_:cursor:on:)`.
+    private var shown: (layout: Layout, active: CGRect?)?
+
+    /// Shows the zones of one layout and highlights the one under the cursor.
+    ///
+    /// The layout arrives as an argument rather than being read from the store,
+    /// and that is the point: a drag holds one layout still from beginning to
+    /// end. Reading the shared one here would let the zones you were shown and
+    /// the zone you snap into come from two different versions of the file — a
+    /// race with a very wide window once the file watcher is live, because the
+    /// whole gesture lasts seconds and a save takes none.
     ///
     /// - Parameters:
+    ///   - layout: the layout this drag is working against.
     ///   - point: cursor position in CG coordinates.
     ///   - screen: the screen the drag is happening on.
-    func show(cursor point: CGPoint, on screen: NSScreen) {
+    func show(_ layout: Layout, cursor point: CGPoint, on screen: NSScreen) {
         if currentScreen != screen { hide() }
         currentScreen = screen
 
         let area = screen.cgVisibleFrame
-        let active = ZoneStore.shared.layout.zone(under: point, in: area)?.rect
+        let active = layout.zone(under: point, in: area)?.rect
 
         let window = window(for: screen)
         guard let view = window.contentView as? ZoneOverlayView else { return }
+
+        // A mouseDragged arrives dozens of times per second and almost all of
+        // them land inside the same zone as the one before. Rebuilding the whole
+        // array and forcing a redraw for each one is work done inside the event
+        // tap callback, and a tap that takes too long is one the system turns
+        // off — which is what `tapDisabledByTimeout` up in DragMonitor exists to
+        // notice.
+        if window.isVisible, let shown, shown.layout == layout, shown.active == active {
+            return
+        }
+        shown = (layout, active)
 
         // Zones are computed in CG and then converted to view coordinates, which
         // are the window's: origin bottom-left and relative to its own frame.
@@ -31,7 +54,7 @@ final class OverlayController {
         // window is going to be given, and the preview showing anything else is
         // the preview lying.
         let windowFrame = window.frame
-        view.zones = ZoneStore.shared.layout.zones.map { zone in
+        view.zones = layout.zones.map { zone in
             let rectCG = zone.rect(in: area)
             let rectCocoa = Coords.cgToCocoa(zone.frame(in: area))
             return ZoneOverlayView.Box(
@@ -47,6 +70,7 @@ final class OverlayController {
     func hide() {
         windows.values.forEach { $0.orderOut(nil) }
         currentScreen = nil
+        shown = nil
     }
 
     private func window(for screen: NSScreen) -> NSWindow {
