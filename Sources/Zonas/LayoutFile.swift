@@ -7,20 +7,27 @@ import Foundation
 /// invisible when you make it.
 enum LayoutFile {
 
-    /// Where the file lives when nobody says otherwise.
+    /// Where the file lives when nobody says otherwise, and how it got there.
     ///
-    /// It is a `static` and not a property of the store on purpose: everything
-    /// that reads or writes the layout takes a URL, so a test can point the
-    /// whole thing at a directory of its own. While this was baked into the
-    /// store's initializer there was no way to exercise the file handling at all
-    /// without touching the real config of whoever ran the tests.
+    /// Everything that reads or writes a layout takes a URL, so a test can point
+    /// the whole thing at a directory of its own. This is the one place that
+    /// decides which URL the app itself uses, and it does three things in order:
+    /// work out where the file should be, bring a pre-1.0 one across if there is
+    /// one, and hand back the path.
     ///
-    /// This one line is also the entire surface the XDG work has to replace.
-    static let defaultURL: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory,
-                                            in: .userDomainMask)[0]
-        return base.appendingPathComponent("Zonas/layout.json")
-    }()
+    /// When the location is ambiguous it says so and falls back to the built-in
+    /// layout rather than picking one of two files the user wrote.
+    static func defaultURL(_ location: LayoutLocation = LayoutLocation()) -> URL? {
+        do {
+            let url = try location.resolve()
+            LayoutMigration.migrateIfNeeded(from: location.legacy, to: url)
+            return url
+        } catch {
+            Log.write("layout: \(error)")
+            Log.write("layout: using the built-in layout until that is sorted out")
+            return nil
+        }
+    }
 
     /// What gets written on the very first launch.
     ///
@@ -35,11 +42,14 @@ enum LayoutFile {
     /// the two ever disagreed the app would quietly change behaviour on a
     /// restart. There is a test that holds them together.
     static let seed = """
-    // ~/Library/Application Support/Zonas/layout.json
+    // ~/.config/zonas/zonas.json5
     //
     // Zonas reads this file and never writes over it. Your comments, your
-    // ordering and your names stay exactly as you left them. Edit, save, and
-    // pick "Reload Zones" from the menu bar.
+    // ordering and your names stay exactly as you left them. Edit it, save,
+    // and the zones change — no need to restart anything.
+    //
+    // It lives in ~/.config on purpose: put it in your dotfiles repo and
+    // symlink it here, and the same layout follows you to every machine.
     //
     // Zones are fractions of the screen's usable area — what is left after the
     // menu bar, the Dock and, on the machines that have one, the notch. Keeping
@@ -59,6 +69,7 @@ enum LayoutFile {
     // wrote.
 
     {
+      version: 1,  // the format, not the app
       name: "Three Columns",
 
       // Editor in the middle, docs on the left, chat on the right. It is the
@@ -92,7 +103,9 @@ enum LayoutFile {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         do {
             let text = try String(contentsOf: url, encoding: .utf8)
-            return try Layout(LayoutSyntax.parse(text))
+            let document = try LayoutSyntax.parse(text)
+            try Layout.checkVersion(document)
+            return try Layout(document)
         } catch {
             Log.write("layout: FAILED to read \(url.path) — \(error)")
             Log.write("layout: the file is NOT touched")

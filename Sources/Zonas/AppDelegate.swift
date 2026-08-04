@@ -36,7 +36,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// the thing to reach for when you want to know whether the file is being
     /// read at all.
     private func startWatchingTheLayout() {
-        let watcher = LayoutWatcher(url: LayoutStore.shared.fileURL) {
+        // No file to follow means the location was ambiguous, which is already
+        // in the log with both paths in it. Watching nothing is the right amount
+        // of work to do about it.
+        guard let url = LayoutStore.shared.fileURL else { return }
+
+        let watcher = LayoutWatcher(url: url) {
             switch LayoutStore.shared.reload() {
             case .changed:
                 Log.write("layout: reloaded, now \"\(LayoutStore.shared.layout.name)\" "
@@ -49,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         watcher.start()
         layoutWatcher = watcher
-        Log.write("watch: following \(LayoutStore.shared.fileURL.path)")
+        Log.write("watch: following \(url.path)")
     }
 
     // MARK: - Permissions
@@ -141,7 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(withTitle: "Hold ⇧ while dragging a window",
                      action: nil, keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(ownItem("Edit Zones (JSON)…", #selector(openLayout)))
+        menu.addItem(ownItem("Edit Zones…", #selector(openLayout)))
         menu.addItem(ownItem("Reload Zones", #selector(reloadLayout), key: "r"))
         menu.addItem(ownItem("Open Log…", #selector(openLog)))
         menu.addItem(.separator())
@@ -174,7 +179,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     @objc private func openLayout() {
-        NSWorkspace.shared.open(LayoutStore.shared.fileURL)
+        guard let url = LayoutStore.shared.fileURL else {
+            NSWorkspace.shared.open(Log.url)   // the log says which files clash
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func reloadLayout() {

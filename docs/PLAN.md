@@ -594,17 +594,32 @@ calendar week. **Every stage ships on its own.**
 | Model cleanup (all of §3) | 1 | **done** |
 | `LayoutSyntax`: tokenizer + tree + canonical writer, **with tests 1–6** | 3 | **done** |
 | `LayoutFile` + `LayoutWatcher` (two sources, retry, symlinks) + `LayoutStore` `@MainActor` | 1.5 | **done**, except `@MainActor` |
-| Migration `layout.json` v0 → `zonas.json5` v1 with backup; XDG paths with an ambiguity error | 1 | |
+| Migration `layout.json` v0 → `zonas.json5` v1 with backup; XDG paths with an ambiguity error | 1 | **done** |
 | `gap`/`margin`/`modifier` actually honoured (fixes the lying preview) | 0.5 | preview fixed; the values are still hardcoded |
 | Icon in alerts + `zonas check` / `fmt` / `monitors` | 0.5 | |
 | README split into user and contributor + demo GIF | 0.5 | reframed to lead with the file; split and GIF pending |
 
-**Next up is the migration**: `layout.json` v0 → `zonas.json5` v1, with a backup
-and XDG paths. It is next because the file currently carries JSON5 under a
-`.json` name, which §4 rightly calls a lie, and because everything after it —
-`defaults`, multiple layouts, per-monitor rules — needs a `version` key to hang
-off. `LayoutSyntax` exists now, so the migration is a transform over a loose
-tree rather than a second set of structs.
+**v1 is flat, and that was a decision.** §4's example shows
+`version`/`defaults`/`layouts`/`screens`, but `layouts[]` belongs to Stage 3 and
+`defaults` to the piece after this one. Introducing the nesting now would make
+everybody write `layouts: [ { … } ]` to have *one* layout, which is the exact
+objection §4 raises against TOML: structure that hides the geometry and buys
+nothing yet. So v1 is `{ version, name, zones }`, and Stage 3 adds `layouts: [
+… ]` as an **alternative** form rather than a replacement. The simple case stays
+simple and there is no second migration to write.
+
+**The backup is the old file itself**, untouched, in the place muscle memory
+already knows. That is a better backup than a `.bak` beside the new one, and
+nothing in the migration path can corrupt it because nothing in the migration
+path writes to it.
+
+**What migrating taught, which no test had:** running it against a real v0 file
+showed the `id` UUIDs coming across, because preserving unknown keys is the rule
+and `id` looked like one. It is not: it is a key this project deliberately
+removed in §3a, and carrying it across means the first thing a migrating user
+sees in their new file is four UUIDs they never typed — the exact complaint §3a
+was answering. Dropping keys a migration knows about, while preserving keys from
+the future, is the distinction that makes a migration different from a copy.
 
 `LayoutStore` is **not** `@MainActor`. The watcher hops to the main queue before
 touching it, which is the guarantee in practice; the compiler-enforced version

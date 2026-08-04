@@ -9,7 +9,7 @@ window fills the one under the cursor. Edit the file, save, and the zones change
 underneath you. (*zonas* is Spanish for *zones*.)
 
 ```js
-// ~/Library/Application Support/Zonas/layout.json
+// ~/.config/zonas/zonas.json5
 //
 //        x: 0                                   x: 1
 //   y: 0 ┌───────────┬───────────────────────────┐
@@ -176,7 +176,7 @@ is missing — has:
 | Item | |
 |---|---|
 | `Hold ⇧ while dragging a window` | Reminder, not a button |
-| `Edit Zones (JSON)…` | Opens `layout.json` in your default editor |
+| `Edit Zones…` | Opens `zonas.json5` in your default editor |
 | `Reload Zones` (⌘R) | Re-reads the file after you edit it |
 | `Open Log…` | Opens `~/Library/Logs/Zonas.log` |
 | `Launch at Login` | Only available from `/Applications` |
@@ -199,7 +199,8 @@ dozens of times per second and would bury the file in noise.
 
 ## The zones
 
-Zones live in `~/Library/Application Support/Zonas/layout.json`, stored as
+Zones live in **`~/.config/zonas/zonas.json5`** — or under `$XDG_CONFIG_HOME`
+if you set it — stored as
 fractions from 0 to 1 of the screen's usable area — the part left over after
 the menu bar, the Dock and, on the machines that have one, the notch. Keeping
 them relative instead of in pixels is what makes the same layout work on the

@@ -15,20 +15,22 @@ import Foundation
 final class LayoutStore {
 
     /// The instance the app uses. Everything else takes a URL.
-    static let shared = LayoutStore(url: LayoutFile.defaultURL)
+    static let shared = LayoutStore(url: LayoutFile.defaultURL())
 
-    private let url: URL
+    /// `nil` when the config location is ambiguous — two files, no way to pick.
+    /// Everything still works, on the built-in layout, and the log says why.
+    private let url: URL?
     private(set) var layout: Layout
 
-    init(url: URL) {
+    init(url: URL?) {
         self.url = url
         // At startup there is no last good layout to keep, so the built-in one
         // is the only answer. That is not the same decision as `reload()`'s.
-        layout = LayoutFile.read(url) ?? .threeColumns
+        layout = url.flatMap(LayoutFile.read) ?? .threeColumns
     }
 
     /// Path of the file, so it can be opened from the menu.
-    var fileURL: URL { url }
+    var fileURL: URL? { url }
 
     /// Writes the starting file, only if there is no file yet.
     ///
@@ -41,6 +43,7 @@ final class LayoutStore {
     /// it — and not the encoded layout. The error is only logged because there
     /// is no window to put it in yet; the first-launch window is Stage 2.
     func createIfMissing() {
+        guard let url else { return }
         guard !FileManager.default.fileExists(atPath: url.path) else { return }
         do {
             try LayoutFile.write(Data(LayoutFile.seed.utf8), to: url)
@@ -73,7 +76,7 @@ final class LayoutStore {
     /// while the file is broken.
     @discardableResult
     func reload() -> Reload {
-        guard let fresh = LayoutFile.read(url) else { return .failed }
+        guard let url, let fresh = LayoutFile.read(url) else { return .failed }
         guard fresh != layout else { return .unchanged }
         layout = fresh
         return .changed
