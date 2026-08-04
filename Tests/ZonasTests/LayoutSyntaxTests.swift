@@ -280,3 +280,57 @@ struct LayoutSyntaxLimitsTests {
         }
     }
 }
+
+@Suite("Comments with nothing to attach to")
+struct DocumentLevelCommentTests {
+
+    /// Found by running it: appending a note to the end of the real config file
+    /// was rejected, and the whole layout went with it. Adding a note at the end
+    /// of a file is an ordinary thing to do.
+    @Test("A note after the closing brace survives instead of being refused")
+    func theEpilogueSurvives() throws {
+        let source = """
+        {
+          name: "Three Columns",
+          zones: [ { name: "All", x: 0, y: 0, width: 1, height: 1 } ],
+        }
+
+        // a note I left myself
+        """
+
+        let document = try LayoutSyntax.parse(source)
+
+        #expect(document.epilogue == ["// a note I left myself"])
+        #expect(try LayoutSyntax.commentsLost(rendering: document).isEmpty)
+        #expect(LayoutSyntax.render(document).hasSuffix("// a note I left myself\n"))
+    }
+
+    /// And the layout still reads, which is the half that actually broke.
+    @Test("The layout under a trailing note still reads")
+    func theLayoutStillReads() throws {
+        let layout = try Layout(LayoutSyntax.parse("""
+        { name: "L", zones: [ { name: "All", x: 0, y: 0, width: 1, height: 1 } ] }
+        // trailing
+        """))
+
+        #expect(layout.name == "L")
+    }
+
+    @Test("Rendering a document with a note at each end is still stable")
+    func stillIdempotent() throws {
+        let source = """
+        // above
+
+        { name: "L", zones: [ { name: "All", x: 0, y: 0, width: 1, height: 1 } ] }
+
+        // below
+        """
+
+        let once = LayoutSyntax.render(try LayoutSyntax.parse(source))
+        let twice = LayoutSyntax.render(try LayoutSyntax.parse(once))
+
+        #expect(twice == once)
+        #expect(once.contains("// above"))
+        #expect(once.contains("// below"))
+    }
+}

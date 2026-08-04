@@ -98,6 +98,16 @@ enum LayoutSyntax {
     struct Document {
         var preamble: [String] = []
         var root: Node
+        /// Comments after the closing brace, which have nothing to attach to
+        /// either.
+        ///
+        /// This used to be a parse error, on the reasoning that a comment with
+        /// no node would be dropped on the next write. That reasoning was right
+        /// and the conclusion was wrong: adding a note at the end of a file is
+        /// an ordinary thing to do, and throwing out somebody's entire layout
+        /// over it is the exact hostility this project is supposed to be against.
+        /// A slot costs three lines and keeps the comment.
+        var epilogue: [String] = []
         /// The line the top-level value opens on, for the errors that are about
         /// the file as a whole rather than about one key in it.
         var rootLine = 1
@@ -125,7 +135,7 @@ enum LayoutSyntax {
 
     /// Every comment in the document, in the order they appear.
     static func comments(of document: Document) -> [String] {
-        document.preamble + comments(in: document.root)
+        document.preamble + comments(in: document.root) + document.epilogue
     }
 
     private static func comments(in node: Node) -> [String] {
@@ -181,7 +191,11 @@ enum LayoutSyntax {
         var out = document.preamble.map { $0 + "\n" }.joined()
         if !document.preamble.isEmpty { out += "\n" }
         write(document.root, into: &out, indent: 0)
-        return out.hasSuffix("\n") ? out : out + "\n"
+        if !out.hasSuffix("\n") { out += "\n" }
+        if !document.epilogue.isEmpty {
+            out += "\n" + document.epilogue.map { $0 + "\n" }.joined()
+        }
+        return out
     }
 
     /// The order keys are written in, when the format has an opinion.

@@ -32,10 +32,11 @@ extension LayoutSyntax {
             let root = try parseValue()
             skipTrivia()
             guard atEnd else { throw fail("trailing content after the top-level value") }
-            // Anything after the top-level value has nowhere to live. Saying so
-            // beats dropping it silently on the next write.
-            guard pending.isEmpty else { throw fail("a comment after the closing brace has nothing to attach to") }
-            return Document(preamble: preamble, root: root, rootLine: rootLine)
+            // Comments down here have no node to attach to, so they go in the
+            // document's own slot rather than being refused. See Document.epilogue.
+            let (epilogue, _) = takePending()
+            return Document(preamble: preamble, root: root,
+                            epilogue: epilogue, rootLine: rootLine)
         }
 
         // MARK: - Values

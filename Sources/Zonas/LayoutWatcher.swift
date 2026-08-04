@@ -137,9 +137,15 @@ final class LayoutWatcher {
         }
         rearmAttempts = 0
 
+        // No `.attrib`. It fires for metadata that is not content — extended
+        // attributes, permissions, access time — and against a real file in
+        // Application Support that produced a second, pointless read about 1.7
+        // seconds after every single save, long after the debounce had closed.
+        // Something on the system touches the file shortly after it changes;
+        // whatever it is, it is not the user editing their zones.
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
-            eventMask: [.write, .extend, .attrib, .delete, .rename, .revoke],
+            eventMask: [.write, .extend, .delete, .rename, .revoke],
             queue: queue)
 
         source.setEventHandler { [weak self] in
