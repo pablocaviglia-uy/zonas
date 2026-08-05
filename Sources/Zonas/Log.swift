@@ -26,7 +26,12 @@ enum Log {
     static var url: URL = {
         let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Logs/Zonas.log")
-    }()
+    }() {
+        // A different file has not been told what day it is. Not a test hook:
+        // the day rule below is a property of the file being written to, so
+        // pointing at another one has to forget the old one's.
+        didSet { queue.sync { lastDay = nil } }
+    }
 
     private static let queue = DispatchQueue(label: "uy.com.fcstudio.zonas.log")
 
@@ -36,10 +41,53 @@ enum Log {
         return f
     }()
 
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// The day the last line was written on, so a new one announces itself.
+    ///
+    /// Guarded by `queue`, like everything else that touches the file.
+    private static var lastDay: String?
+
+    /// Today, spelled the way the rule spells it.
+    static var today: String { dayFormatter.string(from: Date()) }
+
+    /// Waits for everything already queued to reach the file.
+    ///
+    /// Writing is asynchronous so that a drag never waits on a disk, which
+    /// means a test that writes and then reads is racing itself. The app never
+    /// reads its own log and so never needs this.
+    static func waitForWrites() { queue.sync {} }
+
+    /// A `-- 2026-08-05 --` rule whenever the date changes, and nothing on the
+    /// lines themselves.
+    ///
+    /// The lines carry the time only, because the file is read by tailing it
+    /// while something is going wrong and a date on every line is thirteen
+    /// characters of noise in a file whose whole discipline is not having any.
+    ///
+    /// But a file that spans days with no date in it cannot be filtered by time
+    /// at all, and that is not hypothetical: chasing a drag that ended early,
+    /// `awk '$1 >= "08:19:00"'` quietly matched **every previous day's**
+    /// 08:19-to-23:59 as well, which made the timestamps look out of order and
+    /// bought an entirely wrong theory about two processes writing at once. One
+    /// line per day is the cheapest thing that makes that impossible.
+    private static func dayRule(for now: Date) -> String {
+        let today = dayFormatter.string(from: now)
+        guard today != lastDay else { return "" }
+        let first = lastDay == nil
+        lastDay = today
+        return "\(first ? "" : "\n")-- \(today) --\n"
+    }
+
     static func write(_ message: String) {
-        let line = "\(timeFormatter.string(from: Date()))  \(message)\n"
+        let now = Date()
+        let line = "\(timeFormatter.string(from: now))  \(message)\n"
         queue.async {
-            guard let data = line.data(using: .utf8) else { return }
+            guard let data = (dayRule(for: now) + line).data(using: .utf8) else { return }
             try? FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
