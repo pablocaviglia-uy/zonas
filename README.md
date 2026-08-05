@@ -135,10 +135,21 @@ and stepping on it would make the two features fight each other.
 
 ### Covering more than one zone
 
-Hold **⌃ Control** as well, and the zones you drag across are *gathered* rather
-than chosen one at a time: the window is given all of them at once, as a single
-rectangle with no gap down the middle. Two quarter-height zones become one
-full-height column; a column and the one beside it become a two-thirds window.
+**Start the drag first, then hold ⌃ Control as well** — and the zones you drag
+across are *gathered* rather than chosen one at a time: the window is given all
+of them at once, as a single rectangle with no gap down the middle. Two
+quarter-height zones become one full-height column; a column and the one beside
+it become a two-thirds window.
+
+The order matters. On macOS, Control held while you press the mouse button *is*
+the secondary click, so pressing it first turns the whole thing into a
+right-click and nothing happens. Press, drag, then add Control.
+
+Watch out for one more thing: ⇧ and ⌃ are next to each other, and reaching for
+the second one with the same hand tends to lift the first. Letting go of the
+drag modifier cancels the snap on purpose — it is how you back out — so a slip
+throws the gathered selection away and you land in a single zone. If that keeps
+happening, `defaults.span: "command"` puts the second key under the other thumb.
 
 Everything the cursor crosses while Control is down joins the selection, so
 **let go of Control to start the selection over** — that is the way out of a

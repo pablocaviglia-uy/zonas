@@ -159,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private func setActive(_ isActive: Bool) {
         statusItem?.button?.appearsDisabled = !isActive
         statusItem?.button?.toolTip = isActive
-            ? "Zonas: hold \(LayoutStore.shared.layout.modifier.symbol) while dragging a window"
+            ? "Zonas: \(modifierHint.prefix(1).lowercased() + modifierHint.dropFirst())"
             : "Zonas: the Accessibility permission is missing"
     }
 
@@ -297,8 +297,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             accessibilityDescription: problem == nil ? "Zonas" : "Zonas: the layout file has an error")
     }
 
+    /// The one line of instructions the app itself gives, so it has to carry
+    /// both keys — the menu is where somebody looks when they have forgotten
+    /// how this works, and a reminder that only tells half the story is how a
+    /// feature stays undiscovered.
+    ///
+    /// The order is the instruction, not decoration: **drag first, then add the
+    /// span key.** On macOS ⌃ with the mouse button is the secondary click, so
+    /// pressing it before the button turns the whole gesture into a right-click
+    /// and nothing happens at all.
     private var modifierHint: String {
-        "Hold \(LayoutStore.shared.layout.modifier.symbol) while dragging a window"
+        let layout = LayoutStore.shared.layout
+        let drag = "Hold \(layout.modifier.symbol) while dragging a window"
+        guard let span = layout.span else { return drag }
+        return "\(drag), then \(span.symbol) to cover several zones"
     }
 
     /// Leaves the item greyed out in the `.build/` copy. Without this `NSMenu`
