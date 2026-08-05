@@ -32,11 +32,14 @@ part that stops the next person from cheerfully undoing it.
 > **And the gesture itself changed on 2026-08-05**, which is not in any stage
 > either: it is bounded by the modifier now rather than by the mouse button, so
 > lifting a finger off the trackpad no longer ends it. Both that and the
-> multi-zone span are written up in §7 between Stage 4 and Stage 5. **What is
-> left before this is a product for a stranger is Stage 2's first-launch
-> window**, and after four releases it is now the largest gap by a distance —
-> everything else on the list widens the audience, that one is the difference
-> between installing Zonas and uninstalling it.
+> multi-zone span are written up in §7 between Stage 4 and Stage 5.
+>
+> **The first-launch window landed on 2026-08-05**, which closes the gap that
+> sentence used to end on. It was Stage 2's last open piece and the one the plan
+> had called the highest leverage per day in the whole document since the
+> document was written. The write-up is under §7's Stage 2, and the short version
+> is that three of the things it got wrong were found by running it and none of
+> them by testing it. §10 gained a tenth rule from it.
 
 **What works, end to end:** hold ⇧ while dragging a window, the zones light up,
 drop it and the window fills the one under the cursor. Zones are stored as
@@ -60,6 +63,8 @@ universal binary with `-u`.
 | `Zone.swift` | The model: `Zone`, `Layout`, hit-testing, and the two view-space conversions the overlay and the editor share. |
 | `LayoutFile.swift` | Where the file is, reading it, writing it, and the text of the one the first launch creates. |
 | `LayoutStore.swift` | The layout in memory, and which file it came from. |
+| `Welcome.swift` | The first-launch window's decisions: whether to open, which of the three permission states the app is in, and whether macOS is drawing the menu bar icon at all. No window in it, which is what makes it testable. |
+| `WelcomeController.swift` | That window, its two code-drawn diagrams, and the live permission row. |
 | `LayoutSyntax.swift` | JSON5 in, tree out, text back, comments intact. `LayoutParser`, `LayoutSchema` and `LayoutMigration` sit beside it. |
 | `LayoutWriter.swift` | An edited document back into the file it came from. The one place Rule 2 has an exception, and it is computed. |
 | `EditorController.swift` | The editor: windows, gestures, drawing, and when it must not write. |
@@ -968,6 +973,135 @@ and they will not read the log. Budget 2 days for notarization, not 1.
 
 Most of the scripting for this already exists uncommitted — see §1.
 
+#### The first-launch window, done 2026-08-05
+
+The two lines above are left as written. They say *that* it matters and nothing
+about what it is, so this was designed rather than followed, and what follows is
+the part worth keeping.
+
+**One screen, not a flow.** Six comparable utilities were read for this, source
+where it was available. Every one that ships anything at all ships a single
+screen; the one that ships six paged screens with a looping video on each never
+mentions either the Accessibility permission or the menu bar across all six.
+Two of them treat permission and welcome as separate windows, permission first —
+which is right for an app that is a hard gate, and wrong here, because reading
+the manual is a perfectly good reason to be in this window with the permission
+still off. Rectangle's permission window calls `exit(1)` when you close it and
+MacsyZones' calls `exit(0)`; quitting a menu bar utility because somebody closed
+a window is hostile, so this one is closable and says how to get it back.
+
+**The permission has three states and the app only ever showed two.**
+`startMonitor` asks `AXIsProcessTrusted()` and then asks the event tap whether it
+came up. Those are different questions — TCC can flip the bit an instant before
+the tap subsystem honours it, which is the whole reason `waitForPermission`
+retries — and both answers used to arrive at the icon as `setActive(false)`, with
+a tooltip saying the permission was missing. For one of the two that is a lie
+that sends the reader to turn on a switch which is already on. No comparable app
+distinguishes them, and the two longest first-run issue threads in this genre are
+entirely that gap. The stuck state now carries §2's finding, which is the most
+expensive thing in this document: off and on again keeps the old code
+requirement; only − and + rewrite it.
+
+**The window is told, never asks.** A second poller 1.5 s out of phase with the
+watchdog is how two parts of one app come to disagree on screen. `setState` is
+the one choke point and it feeds the icon, the tooltip and the window together.
+Tightening the poll to 0.5 s while the window is up — which one of the surveyed
+apps does — was considered and left alone: 1.5 s is already inside the "did that
+work?" threshold and the second timer is the cost.
+
+**It draws this machine, not a picture of a machine.** The zones come from
+`Layout.viewFrames(in:)`, the same function the overlay and the editor draw
+from, so it is the user's own layout at their own screen's proportions, and it
+follows the file while the window is open. §5's warning that a scaled picture of
+the zones lies is about an *editor*, where one point has to be one point or the
+numbers are unusable; nothing here can be dragged, so there are no numbers to be
+wrong.
+
+**Whether the menu bar icon is visible at all had to be measured, and every
+obvious answer is wrong.** `window.isVisible` is always true, even for an item
+explicitly hidden. `button.isHidden` is always false. `statusItem.isVisible`
+reports only what we ourselves set — it answered yes for all 26 items that had
+been crowded off the bar. And `button.window?.frame`, which is what anybody would
+reach for, is worse than useless: crowded-out items get plausible on-screen
+frames marching leftward (906, 830, 754, 678, …) while nothing is drawn.
+Eight items were given coloured swatches and photographed — occlusion said two
+were visible, the screenshot contained exactly two, the frames claimed eight.
+`window.occlusionState` is the only signal that tells the truth.
+
+What that found is the reason the section exists at all: **macOS does not wrap
+status items round to the left of the notch.** The first item that would cross
+into it is dropped and so is every one after it, and the newest item is last in
+that queue. An app installed onto a full menu bar is therefore precisely the one
+that disappears. That is not an edge case, it is first launch. The notch here is
+185 points wide, x ∈ [771, 956] of a 1728-point screen, and
+`NSScreen.auxiliaryTopLeftArea`/`auxiliaryTopRightArea` are the two runs either
+side of it. It is asked one second late, because `occlusionState` calls a plainly
+visible icon hidden for the first ~80 ms of its life and takes ~0.75 s to settle.
+
+**`applicationShouldHandleReopen` is four lines and it is the escape hatch.**
+Without it, opening Zonas again from Applications does nothing at all — no Dock
+icon to bounce, no window to raise, no menu to open — so the one instinct
+everybody has when an app seems to have vanished leads nowhere. With it, "open
+Zonas again from Applications" is a true answer for the one person who cannot use
+the menu item, which is the person who cannot see the icon. Two of the surveyed
+apps point their users at exactly this.
+
+**And macOS does not ask for a relaunch after an Accessibility grant.** This is
+folklore worth killing, because writing the flow around a restart is what
+stranded users in the competitor's issue tracker. The alert is built per service
+from `PrivacyTCCServices.plist` and a `<SERVICE>_QUIT_ALLOW_TITLE` string; 25
+services have that pair and Accessibility is not one of them — it has three
+strings in the whole table and none of them mentions quitting. Screen Recording
+and Input Monitoring do get "Quit & Reopen". Zonas needs neither, so the window
+may stay open and update itself, and it must never tell anybody to restart it.
+
+##### The three things that were wrong when it was run rather than tested
+
+None of these would have been found any other way, which is the point.
+
+**The flag was being spent by things the user did not do.** It started in
+`windowWillClose`, and installing a new build over the running one — `pkill`, a
+SIGTERM, AppKit closing its windows on the way out — set it with nobody having
+touched the window. That is exactly the case the flag exists to survive: this
+window is the only face the app has, so anything that ends the process before the
+user has finished must leave first launch still owed. It moved to
+`windowShouldClose`, which is only called for the three routes a person can take,
+plus `done`, which says it in its own words because a programmatic `close()` does
+not consult the delegate.
+
+**The window was `.floating`, and the argument for it was right while the
+mechanism was wrong.** The permission row has to stay readable while the user is
+away in System Settings, so it was pinned above everything — where a 560-point
+window lands squarely on top of the pane it just sent them to. Reported from the
+desk within a minute of it being installed. Staying visible is a question about
+*where* the window is: it is an ordinary window now, and it steps aside to the
+left edge before opening Settings, and only when it is not already out of the way.
+
+**The notch was drawn in `labelColor` at 55%.** A sensible-looking choice that
+inverts with the theme: in Dark Mode the one part of the picture that is a *hole*
+came out as the brightest thing in it. Black in both themes. ⎋ went the same way
+— it is the correct Unicode escape symbol and at 13 points it reads as a loading
+spinner, so the window says Escape, the way the README does.
+
+##### And one the mutation pass found
+
+Eleven mutations were applied to check the tests bite. Ten failed the test
+watching for them. The eleventh — dropping the screen's origin out of the menu
+bar sketch's arithmetic — took the **whole suite** down with `Range requires
+lowerBound <= upperBound` instead, because `ClosedRange` traps on inverted
+bounds. Two independently clamped numbers are one edit away from crashing the
+window whose job is to rescue a confused user, so they are sorted before the
+range is built and the mutation now fails cleanly. A test that bites by crashing
+the runner is not the same as a test that bites.
+
+##### What is deliberately not in it
+
+No "Restart Zonas" button, for the reason above. No screenshots of System
+Settings — they rot, Apple redesigns that pane, and the repository has a rule
+against exported art. No tour of the editor or of the file: the window answers
+what this is, where it went, and why it does not work, and a fourth section would
+be the thing somebody closes before reaching the third. No donation ask.
+
 ### Stage 3 — The bet · 4 days
 
 Multiple layouts, `screens` rules by name/glob/`builtin`/`minWidth`, *Copy Screen
@@ -1621,3 +1755,11 @@ that your app is about to stop working.
    Stage 4 fails the same way from outside — you drag and nothing moves — so a
    silent `return` in that path costs an afternoon on somebody else's machine.
    Say which window and why, by name.
+10. **A flag that records a user's decision is written where the user decides,
+    not where the app finds out.** `welcomeDismissed` began in
+    `windowWillClose`, which also fires when the process is being killed — so
+    installing a new build spent somebody's first launch for them. The rule
+    generalises past this one flag: `windowWillClose`, `applicationWillTerminate`
+    and `viewDidDisappear` all fire for reasons that have nothing to do with
+    intent, and anything gated on "the user is finished" has to hang off the
+    gesture that finished it.

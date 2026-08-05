@@ -65,7 +65,9 @@ in the `.build/` copy on purpose) and a stable Accessibility grant.
 | `OverlayController.swift` | The click-through translucent layer that draws the zones. |
 | `Zone.swift` | The model: zones, layouts, and which zone is under the cursor. |
 | `LayoutFile.swift` | Where the layout file is, reading and writing it, and the text of the one the first launch creates. |
-| `ZoneStore.swift` | The layout in memory. |
+| `LayoutStore.swift` | The layout in memory. |
+| `Welcome.swift` | What the first-launch window decides: when to open, which of the three permission states the app is in, and whether macOS is drawing the menu bar icon at all. |
+| `WelcomeController.swift` | That window, and its two code-drawn diagrams. |
 | `AppDelegate.swift` | Menu bar, permission watchdog, wiring. |
 | `LaunchAtLogin.swift` | The login item, via `SMAppService`. |
 | `Log.swift` | Append-only file logging. |

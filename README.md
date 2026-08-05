@@ -108,26 +108,38 @@ Open Zonas from Applications. macOS asks once whether you are sure, because it
 was downloaded from the internet, and tells you Apple checked it and found no
 malicious software. Click **Open**.
 
-**And then nothing happens.** That is the app working. It is also the most
-confusing minute of using it: Zonas has no window and no icon in the Dock, on
-purpose. The only trace of it is a new menu bar icon — a small rectangle split
+A window opens, once, and it is the whole manual: what the gesture is, where
+Zonas lives from now on, and the one permission it needs. Everything below is
+that window written down, for when you have closed it.
+
+Zonas has no window and no icon in the Dock, on purpose. Once you close the
+welcome window the only trace of it is a menu bar icon — a small rectangle split
 into three, dimmed — at the top right of the screen. On a MacBook with a notch
-and a busy menu bar it can end up *underneath* the notch, where it is simply
-invisible; if you cannot find it, quit something else that lives up there.
+and a busy menu bar it can end up hidden, because macOS silently stops drawing
+status items that would cross into the notch and **a newly installed one is the
+first to go**; quit something else that lives up there and it appears. If you
+cannot find it at all, **open Zonas again from Applications** — it is already
+running, and opening it brings the welcome window back.
 
 The icon is dimmed because Zonas cannot do anything yet. Moving another
 application's window requires the **Accessibility** permission, and only you can
 grant it:
 
-1. Click the menu bar icon → **Accessibility Permissions…**
+1. Click **Grant Access…** in the welcome window, or the menu bar icon →
+   **Accessibility Permissions…**
 2. Two things happen at once, which is deliberate: a system dialog asks whether
    to let Zonas control your computer, and System Settings opens straight to
    Privacy & Security → Accessibility.
 3. Find **Zonas** in that list and switch it on. Confirm with Touch ID or your
    password.
 
-Within a second and a half the menu bar icon stops looking dimmed, on its own.
-That is the only confirmation there is, and it is the one to wait for.
+Within a second and a half the row in the welcome window turns green and the menu
+bar icon stops looking dimmed, on its own. **There is nothing to restart** —
+macOS does not ask you to relaunch an app for Accessibility, and Zonas notices by
+itself.
+
+The welcome window opens the first time and never again on its own. It is under
+**Welcome to Zonas…** in the menu whenever you want it.
 
 Now hold **⇧ Shift** and drag any window. Three zones light up — a quarter, a
 half, a quarter — and letting go of ⇧ fills whichever one is under the cursor.
@@ -201,6 +213,7 @@ is missing — has:
 | `Open Log…` | Opens `~/Library/Logs/Zonas.log` |
 | `Launch at Login` | Only available from `/Applications` |
 | `Accessibility Permissions…` | Prompts and opens the Settings pane |
+| `Welcome to Zonas…` | The first-launch window again, whenever you want it |
 | `Quit Zonas` (⌘Q) | |
 
 There is no permission prompt at launch, on purpose: when the app starts by
@@ -388,11 +401,6 @@ Roughly in the order they are being built. The reasoning behind the order — an
 behind most of the decisions in here — is written down in
 [`docs/PLAN.md`](docs/PLAN.md).
 
-- [ ] **A first-launch window.** Today a stranger installs Zonas, sees a small
-      grey icon appear in the menu bar, and has to read the release notes to
-      find out that the Accessibility permission is missing and what the gesture
-      is. This is the largest gap in the whole project and the next thing to be
-      built.
 - [ ] **Multiple layouts, and per-monitor rules.** Which layout goes on which
       screen, described by name, by glob, by minimum width — including monitors
       you do not have plugged in right now. A GUI can only offer a dropdown of
@@ -406,7 +414,10 @@ behind most of the decisions in here — is written down in
 Done since the first release, and no longer on this list: apps that fight the
 Accessibility API — Electron, Chromium and JetBrains windows now move, and an
 app that refuses to shrink to its zone is kept on the screen instead of hanging
-off the edge.
+off the edge. And the first-launch window, which was the largest gap in the
+project for five releases: installing Zonas now opens a window that says what
+the gesture is, where the app lives, and whether the permission is granted —
+watching it land rather than making you check.
 
 ## Contributing
 
