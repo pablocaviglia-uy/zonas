@@ -41,3 +41,39 @@ struct AXWindowTests {
         #expect(AXWindow.differs(asked: asked, applied: moved))
     }
 }
+
+/// The subrole rule, which is the one part of "is this a window Zonas may
+/// move" that can be asked without a window belonging to another process.
+///
+/// The two halves are kept apart on purpose. The first is a list of subroles
+/// that **must keep working**, and every entry is a real window somebody drags:
+/// if a future tightening of this rule breaks one, this is where it says so.
+/// The second is the two the rule actually exists to stop.
+@Suite("Which windows belong to the system rather than to an app")
+struct WindowSubroleTests {
+
+    @Test("A standard window is an app's own", arguments: ["AXStandardWindow"])
+    func theOrdinaryCase(subrole: String) {
+        #expect(AXWindow.isTheSystemsOwn(subrole: subrole) == false)
+    }
+
+    /// The list that killed the obvious rule. Accepting only `AXStandardWindow`
+    /// would have refused every one of these, and each is a window a person
+    /// drags around: Xcode's Settings and IntelliJ's Open dialog are `AXDialog`,
+    /// Steam and Keynote's presentation mode and Firefox's own full screen are
+    /// `AXUnknown`, Transmission's Inspector is `AXFloatingWindow`, and Finder's
+    /// Quick Look panel answers with a subrole that is in no header at all.
+    @Test("A named subrole is not by itself the system's",
+          arguments: ["AXDialog", "AXUnknown", "AXFloatingWindow", "Quick Look", "AXDocumentWindow"])
+    func namedButStillAnApps(subrole: String) {
+        #expect(AXWindow.isTheSystemsOwn(subrole: subrole) == false)
+    }
+
+    /// Notification Center's full-screen shield is `AXSystemDialog` on this
+    /// machine, measured. Nobody drags one of these into a zone.
+    @Test("The system's own dialogs and panels are refused",
+          arguments: ["AXSystemDialog", "AXSystemFloatingWindow"])
+    func theSystemsOwn(subrole: String) {
+        #expect(AXWindow.isTheSystemsOwn(subrole: subrole))
+    }
+}

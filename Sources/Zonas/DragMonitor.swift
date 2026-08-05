@@ -228,10 +228,20 @@ final class DragMonitor {
             // The window is looked up under the starting point, not the current
             // one: by the time the threshold is crossed the cursor may already
             // be over a different one.
-            draggedWindow = AXWindow.at(cgPoint: start)
-            Log.write(draggedWindow == nil
-                ? "drag: no window identified at \(describe(start))"
-                : "drag: window identified at \(describe(start))")
+            //
+            // The lookup answers with a sentence when it answers with no window,
+            // and the sentence is written straight into the log. Every way this
+            // stage can decline looks identical from outside the app — you drag,
+            // and nothing moves — so a line that says "no window identified"
+            // and stops is a line that sends somebody to read the source.
+            switch AXWindow.at(cgPoint: start) {
+            case .window(let window):
+                draggedWindow = window
+                Log.write("drag: \(window.name) at \(describe(start))")
+            case .nothing(let why):
+                draggedWindow = nil
+                Log.write("drag: nothing to move at \(describe(start)) — \(why)")
+            }
         }
 
         // The overlay shows even when no window was identified. Keeping the two

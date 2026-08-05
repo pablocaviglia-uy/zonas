@@ -84,25 +84,147 @@ struct AXWindow {
     /// **A failed read ends the walk.** It used to fall through to the parent,
     /// which against an app that has stopped answering means paying the timeout
     /// again at every level.
-    static func at(cgPoint point: CGPoint) -> AXWindow? {
+    static func at(cgPoint point: CGPoint) -> Lookup {
         var found: AXUIElement?
         guard AXUIElementCopyElementAtPosition(system,
                                                Float(point.x),
                                                Float(point.y),
                                                &found) == .success,
-              let leaf = found else { return nil }
+              let leaf = found else { return .nothing("there is nothing there") }
 
-        if let window = leaf.containingWindow { return AXWindow(element: window) }
+        guard let element = window(containing: leaf) else {
+            return .nothing("there is no window there")
+        }
+        let window = AXWindow(element: element)
+        if let refusal = window.refusal { return .nothing(refusal) }
+        return .window(window)
+    }
+
+    /// What was under the point: a window Zonas will move, or a sentence saying
+    /// why not.
+    ///
+    /// The reason is the whole of why this is not an `Optional`. Everything in
+    /// this stage is invisible when it goes wrong — you drag, and the window
+    /// does not move, and every cause looks identical from the outside. One line
+    /// naming the actual cause is the difference between a bug report and a
+    /// shrug.
+    enum Lookup {
+        case window(AXWindow)
+        case nothing(String)
+    }
+
+    private static func window(containing leaf: AXUIElement) -> AXUIElement? {
+        if let window = leaf.containingWindow { return window }
 
         var current = leaf
         for _ in 0 ..< 100 {
             guard let role = current.role else { return nil }
-            if role == kAXWindowRole { return AXWindow(element: current) }
+            if role == kAXWindowRole { return current }
             if role == kAXApplicationRole { return nil }
             guard let parent = current.parent else { return nil }
             current = parent
         }
         return nil
+    }
+
+    /// Why this window is not one Zonas will move, or `nil` when it will be.
+    ///
+    /// Three questions, asked in this order because each produces a clearer
+    /// sentence than the one after it would for the same window, and because
+    /// **none of them subsumes the others** — which is the thing worth knowing,
+    /// since each one on its own looks sufficient until it is measured.
+    var refusal: String? {
+        if let subrole = element.subrole, AXWindow.isTheSystemsOwn(subrole: subrole) {
+            return "\(name) is \(subrole), which belongs to the system rather than to an app"
+        }
+
+        // Full screen, and it has to be asked about by name because on a
+        // full-screen window the Accessibility API lies twice over: measured on
+        // a TextEdit window, `AXUIElementIsAttributeSettable` answers **yes**
+        // for the size, and setting the size returns **success**, and the window
+        // does not move. Only the position fails honestly, with
+        // kAXErrorFailure. So the settability question below cannot stand in for
+        // this one, and without it a drag onto a full-screen window would be
+        // logged as a snap that worked.
+        //
+        // `AXFullScreen` is a string literal because there is no constant for it
+        // in the public headers. It is what every window manager on macOS uses.
+        if element.flag("AXFullScreen") == true {
+            return "\(name) is in full screen, which cannot be moved through Accessibility"
+        }
+
+        // And this is the one that does the work. Measured against every
+        // non-standard window on this machine: Notification Center's
+        // full-screen shield, its three banners and Teams' notification window
+        // all report a **settable position and a size that is not**, which is
+        // exactly the shape of a thing that is not a user's window.
+        //
+        // The position is deliberately not asked about. It is settable on
+        // practically everything, including elements nobody would call a window,
+        // so requiring it rejects nothing and only muddies the reason.
+        guard element.isSettable(kAXSizeAttribute) else {
+            return "\(name) will not be resized through Accessibility"
+        }
+        return nil
+    }
+
+    /// Whether a subrole names one of the system's own panels rather than an
+    /// application's window.
+    ///
+    /// **The obvious rule was to accept `AXStandardWindow` and nothing else, and
+    /// it was wrong.** It looked extremely well supported here: eleven
+    /// applications, four of them Electron and one a JetBrains IDE — the two
+    /// families this stage expected trouble from — every real window reporting
+    /// `AXStandardWindow`, and every impostor naming itself something else.
+    ///
+    /// It does not survive contact with software that is not installed on this
+    /// machine. The subrole space is open — Finder ships a window whose subrole
+    /// is the string `"Quick Look"`, which is in no header — and the named
+    /// subroles are used by real, draggable windows: `AXUnknown` by Steam, by
+    /// Keynote in presentation mode, and by Firefox and VLC in their own
+    /// non-native full screen; `AXDialog` by Xcode's Settings window and
+    /// IntelliJ's Open dialog; `AXFloatingWindow` by Transmission's Inspector.
+    /// A census of 119 windows collected by AeroSpace found 79 standard against
+    /// 40 that were not. An allowlist of one would refuse to move every one of
+    /// those, and refusing to move somebody's window is the failure this whole
+    /// stage exists to prevent — a window that snaps somewhere odd is a shrug, a
+    /// window that will not move is the reason a repository gets a reputation.
+    ///
+    /// So the rule keeps only what is unambiguous. `AXSystemDialog` and
+    /// `AXSystemFloatingWindow` are the system's own dialogs and panels by
+    /// Apple's definition of them; nobody drags one into a zone. Everything else
+    /// is offered to the settability question above, which is what actually
+    /// distinguishes a window from a panel — and which catches every impostor on
+    /// this machine except one, the Android emulator's floating toolbar, that no
+    /// rule worth shipping could catch without also refusing Transmission's.
+    static func isTheSystemsOwn(subrole: String) -> Bool {
+        subrole == kAXSystemDialogSubrole as String
+            || subrole == kAXSystemFloatingWindowSubrole as String
+    }
+
+    /// The process the window belongs to, which is what every question about
+    /// the *application* rather than the window has to be asked through.
+    var pid: pid_t? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success else { return nil }
+        return pid
+    }
+
+    private var runningApplication: NSRunningApplication? {
+        pid.flatMap(NSRunningApplication.init(processIdentifier:))
+    }
+
+    /// How the window is referred to in the log: the app, and the title when
+    /// there is one.
+    ///
+    /// It is built for the reader of `~/Library/Logs/Zonas.log` and nobody else.
+    /// Everything this stage refuses is refused invisibly — the window simply
+    /// does not move — and "a window" in that sentence would leave the reader
+    /// exactly where they started.
+    var name: String {
+        let app = runningApplication?.localizedName ?? "an unnamed process"
+        guard let title = element.title, !title.isEmpty else { return "\(app)'s window" }
+        return "\(app)'s \"\(title)\""
     }
 
     var frame: CGRect? {
@@ -172,6 +294,36 @@ extension AXUIElement {
 
     fileprivate var role: String? {
         attribute(kAXRoleAttribute) as? String
+    }
+
+    fileprivate var subrole: String? {
+        attribute(kAXSubroleAttribute) as? String
+    }
+
+    fileprivate var title: String? {
+        attribute(kAXTitleAttribute) as? String
+    }
+
+    /// A boolean attribute, or `nil` when the element does not have one.
+    ///
+    /// The distinction matters for `AXFullScreen`: an element that has never
+    /// heard of it and one that says `false` mean the same thing here, but only
+    /// because the caller says so, not because the API blurs them.
+    fileprivate func flag(_ name: String) -> Bool? {
+        attribute(name) as? Bool
+    }
+
+    /// Whether the app will accept a write to this attribute.
+    ///
+    /// A failure to answer counts as "no". The call fails for an element that
+    /// has gone away or an app that has stopped answering, and in both cases
+    /// writing to it is not going to work either.
+    fileprivate func isSettable(_ name: String) -> Bool {
+        var settable: DarwinBoolean = false
+        guard AXUIElementIsAttributeSettable(self, name as CFString, &settable) == .success else {
+            return false
+        }
+        return settable.boolValue
     }
 
     fileprivate func relative(_ name: String) -> AXUIElement? {
