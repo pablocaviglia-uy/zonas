@@ -22,6 +22,12 @@ part that stops the next person from cheerfully undoing it.
 > and are corrected below: `release.sh` has been run end to end, and the
 > uncommitted tree is committed. §3 itself now carries a status note, including
 > the two places where what landed is not literally what it asked for.
+>
+> **Stage 4 has landed too**, out of order like the editor before it, and the
+> write-up is under §7's Stage 4. Read that before touching `AXWindow`: it found
+> that the shipped app could not identify Claude Desktop's window *anywhere on
+> the screen*, and that three of the five pieces §7 names are named wrongly. §10
+> gained two rules from it.
 
 **What works, end to end:** hold ⇧ while dragging a window, the zones light up,
 drop it and the window fills the one under the cursor. Zones are stored as
@@ -39,7 +45,7 @@ universal binary with `-u`.
 | File | What it owns |
 |---|---|
 | `DragMonitor.swift` | The `CGEventTap` that detects the drag. macOS has no API that says "a window is being moved", so this is the awkward part. |
-| `AXWindow.swift` | Reading and moving other apps' windows through the Accessibility API. |
+| `AXWindow.swift` | Reading and moving other apps' windows through the Accessibility API, and everything it takes to work out whether a window is one Zonas may move. The API lies; §7's Stage 4 says where. |
 | `Coords.swift` | Converting between macOS's two screen coordinate systems. The number one source of bugs in this kind of app. Also `NSScreen.displayID`. |
 | `OverlayController.swift` | The translucent layer that draws the zones. |
 | `Zone.swift` | The model: `Zone`, `Layout`, hit-testing, and the two view-space conversions the overlay and the editor share. |
@@ -54,7 +60,7 @@ universal binary with `-u`.
 | `Signature.swift` | Logs the live process's cdhash and designated requirement. |
 | `Log.swift` | File log at `~/Library/Logs/Zonas.log`. |
 | `AppDelegate.swift` | Menu bar, permissions, wiring. |
-| `Tests/ZonasTests/` | 198 tests. `swift test`, and CI runs it on every push. |
+| `Tests/ZonasTests/` | 217 tests. `swift test`, and CI runs it on every push. |
 
 ### The release pipeline, corrected
 
@@ -941,6 +947,265 @@ new repo's reputation.
 > instrument for "the app gave back something else" exists and nothing acts on
 > it yet.
 
+> **Done, 2026-08-04**, in five commits, `e8a03e8` to `0818d60`. The four lines
+> above are left exactly as written so the two can be read against each other.
+> Three of the five pieces are named wrongly there, one of the two "already
+> known" facts is false, and the largest thing this stage fixed is not mentioned
+> at all — it was found in the first hour, by measuring rather than by reading.
+> What each piece established is below, in the order the commits landed.
+
+#### The bug that was there all along
+
+`AXWindow.at` climbed the parent chain looking for `kAXWindowRole` and gave up
+after twelve hops. That limit was written as a guard against cyclic parents,
+which are real, and never checked against how deep the chains actually are.
+
+Chromium builds a window's title bar and toolbar out of the same nested DOM as
+the page, so the chain is no shallower at the top of the window than in the
+middle of it. **Claude Desktop's is 32 hops.** With its window filling the
+built-in screen, the shipped code identified a window at **0 of 1995 sampled
+points** — you could hold ⇧, drag it anywhere at all, watch the zones light up,
+and nothing would ever move. There are 42 `drag: no window identified` lines in
+the log on this machine and most of them are that.
+
+Chrome, Firefox, Android Studio and iTerm2 all resolve in under ten hops, which
+is why a limit of twelve survived daily use without ever looking wrong. **That
+is the shape of every bug in this stage**: it is invisible until you point an
+instrument at it, because the failure and the "you dragged a window that was not
+there" case look identical from the outside.
+
+The fix is not a bigger number. `kAXWindowAttribute` asks an element which
+window it is drawn in, in one call — checked against the walk at 912 points of a
+covered screen and against the deepest leaves of ten running applications, it
+named the same window every time it answered, at 0.03 ms against the walk's
+1.24 ms. Three things answer `nil`: a window, which is not inside a window;
+anything inside a sheet; and a toolkit that never implemented the attribute,
+which here is the Android emulator's Qt windows. So the walk stays as the
+fallback, now terminating at `AXApplication` — which is what actually ends every
+chain — with the hop count demoted to what it was meant to be.
+
+#### The hazard §7 does not name: time
+
+`AXWindow.at` runs inside the event tap's callback, on the main run loop, and a
+callback that takes too long has its tap disabled by the system. `revive` exists
+because that happens. Measured by sending a live application `SIGSTOP` and
+reading one attribute off one of its windows, **a single call takes 1503 ms**
+before it gives up.
+
+`AXUIElementSetMessagingTimeout` on the system-wide element sets the default for
+every element the process creates afterwards, which is the only way to cover
+elements the walk discovers as it goes; verified against a stopped process, the
+same read came back at 252 ms. A failed read now ends the walk instead of
+falling through to the parent, so a stalled app costs one timeout rather than
+one per level. 250 ms is five times the slowest healthy lookup over 378 samples
+swept across the screen, whose median is 0.8 ms.
+
+#### What the subrole filter established
+
+**The obvious rule is wrong, and it looked extremely well supported.** Eleven
+applications on this machine, four of them Electron and one a JetBrains IDE —
+the two families §7 expected trouble from — every real window reporting
+`AXStandardWindow`, and every impostor naming itself something else:
+`AXSystemDialog` for Notification Center's full-screen shield, `AXUnknown` for
+its banners, `AXDialog` for Teams' notification window and for the Android
+emulator's floating toolbar. An allowlist of one covers all of it.
+
+It loses on software that is not installed here. The subrole space is open —
+Finder ships a window whose subrole is the string `"Quick Look"`, which is in no
+header — and the named subroles are used by real, draggable windows: Xcode's
+Settings and IntelliJ's Open dialog are `AXDialog`, Steam and Keynote's
+presentation mode and Firefox's own full screen are `AXUnknown`, Transmission's
+Inspector is `AXFloatingWindow`. A census of 119 windows collected by AeroSpace
+found 79 standard against 40 that were not. MacsyZones requires
+`AXStandardWindow` and therefore cannot snap any of them.
+
+So the rule keeps only what is unambiguous — `AXSystemDialog` and
+`AXSystemFloatingWindow`, the system's own panels, which nobody drags into a
+zone — and **the asymmetry is the point**. A window that snaps somewhere odd is
+a shrug; a window that will not move is the reason a new repository gets a
+reputation, and preventing that is what this stage is for. The one impostor left
+through is the emulator's toolbar, indistinguishable by any shippable rule from
+Transmission's Inspector.
+
+**And §7's "it will happily hand back a sheet or a popover" is false.** A sheet
+is `role = AXSheet`, not `AXWindow`, so the walk never stops on one — it climbs
+*past* it and returns the host window. That is a real defect and a different
+one: a ⇧-drag started on a modal sheet silently retargets the window behind it.
+It is not fixed here, because it is an early-stop in the walk and not a subrole
+question, and because the `kAXWindowAttribute` fast path now answers first —
+whether it resolves through a popover is unmeasured. See *Still open*.
+
+#### What "per-app minimum sizes" established
+
+**It is the wrong shape for the problem.** A number in the config file would be
+a second copy of something the application already knows and already enforces,
+stale the first time anybody ships a new version. There is no Accessibility
+attribute for a window's minimum size and there could not be a reliable one: an
+app may clamp in `windowWillResize(_:to:)`, which is code, and runs after every
+constraint a query API could see. yabai's maintainer prototyped the private
+`SLSWindowIteratorGetConstraints` and rejected it — wrong for most apps, and not
+reported at all until the window has been operated on once.
+
+Asking and looking at the answer is not a workaround here, it is the only thing
+that can be correct — and `differs(asked:applied:)` has been sitting next to
+`setFrame` since two stages ago with nothing acting on it.
+
+What was missing was what to *do*. Measured floors, against the 428-point
+"Derecha" zone of the layout in use: Chrome 500 wide, Claude 600, Xcode 600,
+WhatsApp 800. Teams, Android Studio and iTerm2 take whatever they are given. A
+window 800 wide placed at x = 1300 on a 1728-point screen puts 372 points of
+itself under the bezel, unreachable except by dragging it out again. So the
+origin is pulled back by exactly the overhang and no further, keeping the zone's
+own origin whenever it fits.
+
+Centring the overflow on the zone was the alternative and it loses: at any edge
+zone it pushes the window further off the screen before the clamp drags it back,
+so the clamp does the work either way and the centring only moves the window
+away from where it was dropped. When the two bounds contradict each other — a
+window wider than the whole screen — **the near edge wins**, or the title bar
+goes somewhere you cannot reach it. One test covers that case alone, and it is
+the only one that fails when the `max` and the `min` are applied in the other
+order.
+
+The same measurement retired a rule from the commit before it. A window whose
+size is not settable was being refused; that is a good description of
+Notification Center's banners and an equally good description of Xcode's Welcome
+window and the iPhone Simulator, which people move around all day. They are
+placed without being resized. Two commits, opposite answers, one day apart —
+worth leaving visible, because the second one is the same trade the subrole rule
+already makes and the first one got it backwards.
+
+#### What `AXEnhancedUserInterface` established
+
+**§7 calls this an Electron and Chrome matter and it is not.** With the flag set
+on the application element, `kAXSizeAttribute` stops working — not delayed, not
+animated, not clamped, *ignored*, while the position applies normally and every
+call returns success. Asking for 432 × 700:
+
+```
+                     flag on          flag off
+  Google Chrome      1728x1079        500x700   (Chrome's own floor)
+  Microsoft Teams    1728x1084        432x700   exactly as asked
+  WhatsApp            856x1084        800x700   (its own floor)
+  Android Studio     1728x1084        432x700   exactly as asked
+  Firefox            1728x1084        500x700   (its own floor)
+  iTerm2             1728x1084        432x700   exactly as asked
+```
+
+iTerm2 and Android Studio fail exactly as completely as Chrome does. This is
+AppKit's accessibility path, not any application's quirk, so a list of affected
+bundle identifiers would be a list of every application there is. There is no
+list in the code and nothing asks who the app is.
+
+Every source frames this as an animation or timing workaround. The measurement
+says otherwise, and it matters: **MacsyZones' retry loop is not an alternative**,
+because retrying a write that is ignored stays ignored.
+
+The flag is only touched when it is already on. Nothing in Zonas sets it, and it
+read `false` on all 49 processes running here — with Zonas holding Accessibility
+permission and with Hammerspoon running too. Whoever turns it on is another
+assistive application on the user's machine; what this buys is that Zonas keeps
+working next to them instead of silently losing the ability to resize anything.
+It is restored with a `defer`, because turning it off overrides somebody else's
+setting. Chromium is on record that the *re-enable* is the expensive edge — it
+rebuilds the accessibility tree, and "in extreme cases can result in the browser
+becoming non-responsive" (bug 1364487) — which is the argument against doing it
+on every mouse move. It runs once, on the drop, which is the only moment Zonas
+writes a frame at all.
+
+#### What full screen established
+
+**The Accessibility API lies twice about a full-screen window.** Measured on a
+TextEdit window put into full screen on purpose: `AXUIElementIsAttributeSettable`
+answers **yes** for the size, setting the size returns **success**, and the
+window does not move. Only the position fails honestly, with `kAXErrorFailure`.
+So the settability question cannot stand in for this one, and without the check
+a drag onto a full-screen window is logged as a snap that worked.
+
+The attribute is the string `"AXFullScreen"`, which is in no public header;
+`kAXFullScreenButtonAttribute` is a different thing and does not answer this.
+Detecting full screen by comparing the frame to the screen is unsound — a zoomed
+window has the same frame — and the zoomed state itself is not detectable
+cross-process at all, which is fine, because a zoomed window is an ordinary
+movable window.
+
+#### What the ignore list established
+
+`ignore` is a list of bundle identifiers at the **root** of the file rather than
+inside `defaults`, and that is a decision about Stage 3. §4 describes `defaults`
+as the block that applies to every layout and that any layout may override; "which
+applications Zonas will not touch" is not a property of a set of rectangles, and
+nesting it under a heading that promises per-layout overrides would promise
+something there is no reason to build.
+
+Matching is exact. yabai matches a POSIX regex against the localized application
+name, which breaks for everybody whose Mac is not in English — this repository's
+author works in Spanish, where System Settings is "Ajustes del Sistema".
+Patterns are not supported *yet* rather than ruled out: an identifier is letters,
+digits, hyphens and dots, so an entry containing `*` cannot collide with a real
+one and can be given a meaning later without changing what any existing file
+means. A process with no bundle identifier cannot be excluded at all, and `zonas
+apps` says so next to it rather than letting somebody discover it by writing a
+line that never matches.
+
+**The overlay does not appear for an excluded application**, and that
+contradicts a decision `handleDrag` had already made deliberately. Everywhere
+else the zones light up whether or not a window was identified, because Zonas
+does not yet know whether the drop will work and the difference between "the
+preview appeared and nothing snapped" and "nothing appeared at all" is the
+diagnosis. Here it does know, because it was told in the file, and zones lighting
+up over a window that was never going to move is §3e's lying preview with a
+different cause. There is nothing to diagnose: the user wrote the line.
+
+One thing outside this stage came with it. The canonical renderer wrote an empty
+list across two lines, which nobody types and which would have made `fmt`
+reformat the file every time somebody removed the last entry from their ignore
+list. `[]` and `{}` now render inline.
+
+#### The instrument that made all of this findable
+
+Every refusal in this stage ends in a sentence in the log naming the window and
+the reason, because **every one of them is invisible from outside the app**: you
+drag, and nothing moves, and a jammed lookup, a full-screen window, an excluded
+app and a broken tap all look the same. The old `drag: no window identified` was
+a line that could only send somebody to read the source.
+
+```
+drag: Google Chrome's "…" at (900, 600)
+drag: nothing to move at (800, 500) — TextEdit's "Untitled" is in full screen,
+      which cannot be moved through Accessibility
+drag: leaving TextEdit's "Untitled" alone at (400, 214)
+      — com.apple.TextEdit is in the file's ignore list
+window: asked for 428×1084 at (1300, 33) — the app would not go below 800×1084,
+      so it sits at (928, 33) to stay on the screen
+```
+
+#### Still open
+
+Everything here was measured on the built-in screen alone; **the ultrawide was
+not plugged in**, which is precisely the configuration §6 says this project
+rides on.
+
+- **The sheet retarget**, described above. It needs an early stop in the lookup,
+  and first it needs measuring whether `kAXWindowAttribute` resolves through a
+  *popover* the way it declines to through a sheet. A sandboxed app's save panel
+  is hosted by another process entirely and may present as its own window, in
+  which case the early stop would not cover it either.
+- **`position → size → position` across two displays.** The order is deliberate
+  and its reason is recorded in `setFrame`, but it has never been exercised by
+  moving a large window from the ultrawide onto the laptop screen. That is the
+  measurement to run the next time both are attached.
+- **Revalidating at the drop.** A window can go full screen during the drag, and
+  yabai re-checks on mouse-up for that reason. Zonas checks once, at the moment
+  the gesture is recognised.
+- **A slow but responsive application.** A stalled one now costs one timeout.
+  One that answers in 200 ms and needs thirty hops would not be covered by
+  anything here, because the fast path would answer first — but if it did not,
+  the arithmetic is bad. The fix is to get the Accessibility work off the tap
+  callback, and that is a bigger change than the whole of this stage.
+- **Nothing tells the user any of this.** All of it lands in the log. The window
+  that would say it out loud is Stage 2's.
+
 ### Stage 5 — The visual editor · 12 days
 
 | Piece | Days |
@@ -1103,3 +1368,14 @@ that your app is about to stop working.
 6. **Never sign ad-hoc when a real identity exists.** See §2.
 7. **When the permission "gets lost", check the signature before anything else.**
    The app logs its own fingerprint at startup for exactly this.
+8. **Every Accessibility write is a request, not an instruction — read it back.**
+   The API returns `success` for writes it discarded, and
+   `AXUIElementIsAttributeSettable` returns `true` for attributes it will
+   discard. Both were measured on a full-screen window, which says its size is
+   settable, accepts the size, and does not move. `setFrame` reads back and acts
+   on the difference; anything new that writes an attribute has to do the same
+   or it will report success it did not have.
+9. **A refusal that is not in the log did not happen.** Everything in §7's
+   Stage 4 fails the same way from outside — you drag and nothing moves — so a
+   silent `return` in that path costs an afternoon on somebody else's machine.
+   Say which window and why, by name.
