@@ -1268,6 +1268,43 @@ held ⌃ from the first event, swept across the middle of the screen, and got
 `"Izquierda Arriba + Izquierda Abajo + Centro"` — everything the cursor had
 touched, exactly as specified.
 
+#### What subscribing to the keyboard cost, and the rule that pays it back
+
+`.flagsChanged` was added so that pressing a key with the cursor parked is
+noticed. It also made the app **strictly less forgiving**, and that was not
+foreseen: for two releases nothing looked at the keyboard, so a modifier that
+bounced for forty milliseconds went unseen until the next mouse movement, by
+which time the finger was back. Subscribing turned every such bounce into an
+overlay that blanks and returns — reported from the desk as *"in a moment
+everything gets deselected"*.
+
+The rule now is asymmetric and the asymmetry is the whole fix: **a key on its
+own can bring the zones up, but never take them down.** Showing has to be
+instant because somebody is waiting to see it. Hiding does not: a modifier that
+comes up while the hand is still is at least as likely to be a finger on its way
+to the second key as it is to be somebody changing their mind, and there is
+nothing to gain by acting on it before the user does something else.
+
+That is only safe with its other half. Releasing the modifier before the button
+is how a drag is backed out of, and that worked *only* because the release had
+already hidden the overlay — `handleDrop` asked whether the overlay was visible,
+which is a question about a picture rather than about an intention. It now asks
+the mouse-up event which keys are held. The drop is the decision, so the drop is
+where the state that decides it is read, and the two changes cannot be made
+separately: the first without the second turns every cancelled drag into a snap.
+
+Both directions were measured by posting events, because `DragMonitor` cannot be
+unit-tested. A sixty-millisecond bounce used to log `hidden after 59 ms … from a
+key` and immediately `showing` again; it now logs neither and snaps. A
+deliberate release followed by the button coming up with no movement in between
+logs `the modifier was not held at the drop — nothing snapped`.
+
+**The log line that found this is worth keeping.** "The modifier was released"
+is a conclusion, and it read identically for a decision and for a fumble. It now
+carries how long the zones had been up and whether the news came from the mouse
+or from a key, which is what tells the two apart — the original report could not
+be reproduced on demand, and the six drags recorded while trying were all clean.
+
 ### Stage 5 — The visual editor · 12 days
 
 | Piece | Days |

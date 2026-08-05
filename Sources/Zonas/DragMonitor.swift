@@ -232,6 +232,17 @@ final class DragMonitor {
         // a drag event would have done — which is the point: pressing the
         // modifier and moving the mouse are two ways of changing the same
         // answer, and only one of them used to be heard.
+        //
+        // **A key can bring the zones up but never take them down**, and the
+        // asymmetry is deliberate. Showing has to be instant because the user is
+        // waiting to see it. Hiding does not: a modifier that comes up while the
+        // hand is still is at least as likely to be a finger on its way to the
+        // second key as it is to be somebody changing their mind, and blanking
+        // the screen for the 40 ms it takes is a flicker with no information in
+        // it. Whatever the release meant, the next mouse movement will act on
+        // it — and if there is no next movement, the drop below reads the keys
+        // itself. Measured: a 40 ms gap posted between two drag events used to
+        // hide the zones and bring them straight back.
         case .flagsChanged:
             if isDragging { handleDrag(event) }
 
@@ -303,18 +314,31 @@ final class DragMonitor {
         // the user wrote the line.
         if let layout = snapshot, !isExcluded, event.flags.contains(layout.modifier.flags) {
             guard let screen = NSScreen.containing(cgPoint: current) else { return }
-            if !isOverlayVisible { Log.write("overlay: showing zones of \"\(layout.name)\"") }
+            if !isOverlayVisible {
+                shownAt = DispatchTime.now()
+                Log.write("overlay: showing zones of \"\(layout.name)\"")
+            }
             overlay.show(layout, selecting: selection(for: layout, at: current, on: screen,
                                                      flags: event.flags),
                          on: screen)
             isOverlayVisible = true
-        } else if isOverlayVisible {
+        } else if isOverlayVisible, event.type != .flagsChanged {
             // Letting go of the modifier before the mouse button cancels the
             // snap, on purpose — it is how you back out of a drag you did not
             // mean to make. It used to do it without a word, so from the log a
             // cancelled drag and a broken drop looked exactly the same: an
             // overlay that appeared and no drop after it.
-            Log.write("overlay: hidden, the modifier was released — nothing will snap")
+            //
+            // It now also says what it saw and how long the overlay had been up.
+            // "The modifier was released" is a conclusion, and the two things it
+            // could be hiding are a person changing their mind and a key
+            // bouncing for forty milliseconds on the way to another one — which
+            // look identical in the old wording and want opposite fixes.
+            Log.write("overlay: hidden after \(DragMonitor.elapsed(since: shownAt))"
+                      + ", the modifier was released"
+                      + " — nothing will snap (\(DragMonitor.describe(event.flags))"
+                      + ", from \(DragMonitor.describe(type: event.type)))")
+            gathered = []
             overlay.hide()
             isOverlayVisible = false
         }
@@ -346,22 +370,70 @@ final class DragMonitor {
         "(\(Int(p.x)), \(Int(p.y)))"
     }
 
+    /// When the zones went up, so that a hide can say how long they lasted.
+    ///
+    /// A tenth of a second and four seconds are the same line in the log
+    /// otherwise, and they are not the same event: one is a finger, the other is
+    /// a decision.
+    private var shownAt: DispatchTime?
+
+    private static func elapsed(since start: DispatchTime?) -> String {
+        guard let start else { return "an unknown time" }
+        let ms = (DispatchTime.now().uptimeNanoseconds &- start.uptimeNanoseconds) / 1_000_000
+        return ms < 1000 ? "\(ms) ms" : String(format: "%.1f s", Double(ms) / 1000)
+    }
+
+    /// Which modifiers were actually down, named the way the file names them.
+    private static func describe(_ flags: CGEventFlags) -> String {
+        let held = Modifier.allCases.filter { flags.contains($0.flags) }
+        guard !held.isEmpty else { return "no modifier held" }
+        return "still held: " + held.map { "\($0.symbol) \($0.rawValue)" }.joined(separator: " ")
+    }
+
+    /// Whether it was the mouse or the keyboard that brought the news. The
+    /// keyboard only started being listened to when spanning arrived, so this is
+    /// the line that tells a slip apart from a deliberate release.
+    private static func describe(type: CGEventType) -> String {
+        switch type {
+        case .flagsChanged: return "a key"
+        case .leftMouseDragged: return "the mouse moving"
+        case .leftMouseUp: return "the button coming up"
+        default: return "\(type.rawValue)"
+        }
+    }
+
     private func handleDrop(_ event: CGEvent) {
         defer { forgetTheDrag() }
 
         guard isOverlayVisible else { return }
 
-        guard let window = draggedWindow else {
-            Log.write("drop: there was a zone but no window to move")
+        // The same layout that was drawn, not whatever is in the store now.
+        //
+        // Unreachable when it fails: the snapshot is taken before the overlay
+        // can appear, and the overlay being up is what got us past the guard
+        // above. It logs anyway, because a silent `return` in the drop path is
+        // the kind of thing that costs an afternoon the day it does happen.
+        guard let layout = snapshot else {
+            Log.write("drop: the overlay was up with no layout behind it")
             return
         }
-        // The same layout that was drawn, not whatever is in the store now.
-        guard let layout = snapshot else {
-            // Unreachable: the snapshot is taken before the overlay can appear,
-            // and the overlay being up is what got us past the guard above. It
-            // logs anyway, because a silent `return` in the drop path is the
-            // kind of thing that costs an afternoon the day it does happen.
-            Log.write("drop: the overlay was up with no layout behind it")
+
+        // **The keys on the mouse-up decide, not the picture on the screen.**
+        // Letting go of the modifier before the button is how you back out of a
+        // drag, and until now that worked only because releasing it had already
+        // hidden the overlay. Once a key on its own stopped being allowed to
+        // hide anything — see `.flagsChanged` above — the overlay can still be
+        // up at the moment of a deliberate cancel, and the cancel would snap the
+        // window instead. Asking the event that ends the gesture is both the fix
+        // and the more honest question: the drop is the decision, so the drop is
+        // where the state that decides it should be read.
+        guard event.flags.contains(layout.modifier.flags) else {
+            Log.write("drop: the modifier was not held at the drop — nothing snapped")
+            return
+        }
+
+        guard let window = draggedWindow else {
+            Log.write("drop: there was a zone but no window to move")
             return
         }
         guard let screen = NSScreen.containing(cgPoint: event.location) else {
