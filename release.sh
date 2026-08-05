@@ -128,8 +128,19 @@ PLIST_VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" 
     "$RAIZ/Resources/Info.plist" 2>/dev/null || echo "")"
 [[ "$PLIST_VERSION" == "$VERSION" ]] || die \
     "Resources/Info.plist says $PLIST_VERSION, you asked for $VERSION" \
-    "The plist is the source of truth and it is under git. Fix it and commit:" \
-    "  /usr/libexec/PlistBuddy -c \"Set :CFBundleShortVersionString $VERSION\" Resources/Info.plist"
+    "The plist is the source of truth and it is under git. Edit the one line" \
+    "BY HAND and commit it:" \
+    "" \
+    "  <key>CFBundleShortVersionString</key>" \
+    "  <string>$VERSION</string>" \
+    "" \
+    "Do NOT use \`PlistBuddy -c Set\`, which this message used to recommend." \
+    "It rewrites the whole file: it alphabetises every key and it DELETES the" \
+    "XML comments, which for this plist means losing the note explaining why" \
+    "LSUIElement is there. Measured, on the 0.1.0 -> 0.2.0 bump: one intended" \
+    "line changed and fifteen unintended ones came with it. A project whose" \
+    "thesis is that a writer must not eat your comments should not ship a" \
+    "release step that does."
 
 # A release built from uncommitted changes cannot be rebuilt from the tag, and
 # the tag is the only thing anyone else can look at.
