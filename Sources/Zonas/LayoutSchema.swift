@@ -71,7 +71,43 @@ extension Layout {
                   zones: zones,
                   gap: defaults.gap,
                   margin: defaults.margin,
-                  modifier: defaults.modifier)
+                  modifier: defaults.modifier,
+                  ignored: try Layout.ignored(members.first { $0.key == "ignore" }))
+    }
+
+    /// The `ignore` list: bundle identifiers of applications to leave alone.
+    ///
+    /// It sits at the root rather than inside `defaults`, and that is a decision
+    /// about what happens in Stage 3. `defaults` is the block §4 describes as
+    /// applying to every layout *and overridable by any one of them* — a gap or
+    /// a modifier per layout is a sensible thing to want. "Which applications
+    /// Zonas will not touch" is not a property of a set of rectangles, and
+    /// nesting it under a heading that promises per-layout overrides would
+    /// promise something there is no reason to build.
+    ///
+    /// An entry naming an application that is not installed is not an error. It
+    /// is the whole point of §6's bet applied one level down: the file describes
+    /// the world, including the parts of it that are not plugged in or not
+    /// installed on the machine reading it.
+    private static func ignored(_ member: LayoutSyntax.Member?) throws -> Set<String> {
+        guard let member else { return [] }
+        guard case .array(let elements) = member.node else {
+            throw LayoutSchemaError(
+                line: member.line,
+                message: "ignore has to be a list of bundle identifiers, in brackets")
+        }
+
+        var identifiers: Set<String> = []
+        for element in elements {
+            guard case .string(let identifier) = element.node, !identifier.isEmpty else {
+                throw LayoutSchemaError(
+                    line: element.line,
+                    message: "a bundle identifier has to be text, in quotes — "
+                        + "\"com.apple.Safari\", which `zonas apps` will print for you")
+            }
+            identifiers.insert(identifier)
+        }
+        return identifiers
     }
 
     /// The `defaults` block, or the built-in values when there is none.

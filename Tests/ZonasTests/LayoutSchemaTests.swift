@@ -284,3 +284,123 @@ struct DefaultsTests {
         #expect(problem?.message.contains("in braces") == true)
     }
 }
+
+/// The applications the file says to leave alone.
+@Suite("The ignore list")
+struct IgnoreListTests {
+
+    private let oneZone = """
+      zones: [{ name: "All", x: 0, y: 0, width: 1, height: 1 }],
+    """
+
+    private func withIgnore(_ entry: String) throws -> Layout {
+        try layout("{ name: \"L\", \(oneZone) ignore: \(entry) }")
+    }
+
+    @Test("A layout with no ignore list ignores nothing")
+    func absentMeansEmpty() throws {
+        let result = try layout("{ name: \"L\", \(oneZone) }")
+
+        #expect(result.ignored.isEmpty)
+        #expect(result.ignores("com.apple.Safari") == false)
+    }
+
+    @Test("Bundle identifiers are read and matched exactly")
+    func identifiersMatch() throws {
+        let result = try withIgnore(#"["com.apple.Safari", "com.apple.ActivityMonitor"]"#)
+
+        #expect(result.ignored == ["com.apple.Safari", "com.apple.ActivityMonitor"])
+        #expect(result.ignores("com.apple.Safari"))
+        #expect(result.ignores("com.apple.ActivityMonitor"))
+    }
+
+    /// Exact, and that is the whole rule. A prefix that happens to match must
+    /// not take the app with it — `com.apple.Safari` is not `com.apple`, and
+    /// somebody who wrote the shorter one is going to be surprised either way,
+    /// so it had better be surprised in the direction of doing nothing.
+    @Test("Nothing but an exact identifier matches")
+    func onlyExactMatches() throws {
+        let result = try withIgnore(#"["com.apple.Safari"]"#)
+
+        #expect(result.ignores("com.apple") == false)
+        #expect(result.ignores("com.apple.SafariTechnologyPreview") == false)
+        #expect(result.ignores("Safari") == false)
+        #expect(result.ignores("COM.APPLE.SAFARI") == false)
+    }
+
+    /// A process with no bundle identifier — the Android emulator on this
+    /// machine — cannot be excluded, and must not be excluded by accident
+    /// either.
+    @Test("A process with no identifier is never in the list")
+    func noIdentifierIsNeverIgnored() throws {
+        let result = try withIgnore(#"["com.apple.Safari"]"#)
+
+        #expect(result.ignores(nil) == false)
+    }
+
+    /// The point of §6's bet, one level down: the file describes the world,
+    /// including the parts of it that are not installed on the machine reading
+    /// the file.
+    @Test("An app that is not installed is not an error")
+    func uninstalledAppsAreFine() throws {
+        #expect(try withIgnore(#"["com.example.NotHere"]"#).ignores("com.example.NotHere"))
+    }
+
+    @Test("ignore has to be a list")
+    func mustBeAList() throws {
+        let problem = #expect(throws: LayoutSchemaError.self) {
+            try withIgnore(#""com.apple.Safari""#)
+        }
+
+        #expect(problem?.message.contains("in brackets") == true)
+    }
+
+    @Test("An entry that is not text names its own line")
+    func entriesMustBeText() throws {
+        let problem = #expect(throws: LayoutSchemaError.self) {
+            try layout("""
+            {
+              name: "L",
+              zones: [{ name: "All", x: 0, y: 0, width: 1, height: 1 }],
+              ignore: [
+                "com.apple.Safari",
+                42,
+              ],
+            }
+            """)
+        }
+
+        #expect(problem?.line == 6)
+        #expect(problem?.message.contains("in quotes") == true)
+    }
+
+    @Test("An empty identifier is refused")
+    func emptyEntriesAreRefused() throws {
+        #expect(throws: LayoutSchemaError.self) { try withIgnore(#"[""]"#) }
+    }
+
+    /// Rule 4, from the other side: a key the editor never touches has to come
+    /// back out of the writer exactly as it went in, comments and all.
+    @Test("It survives a write that only changed the zones")
+    func itSurvivesTheWriter() throws {
+        let source = """
+        {
+          name: "L",
+          // the ones that are the wrong shape for a layout
+          ignore: [
+            "com.apple.ActivityMonitor",  // too small to be worth a zone
+          ],
+          zones: [{ name: "All", x: 0, y: 0, width: 1, height: 1 }],
+        }
+        """
+        var document = try EditorDocument(layout(source))
+        let cut = document.split(rid: document.zones[0].rid, at: 0.5, .vertical, minimum: 0.01)
+        #expect(cut)
+
+        let written = try LayoutWriter.apply(document, to: source)
+
+        #expect(written.contains(#""com.apple.ActivityMonitor""#))
+        #expect(written.contains("// too small to be worth a zone"))
+        #expect(try layout(written).ignored == ["com.apple.ActivityMonitor"])
+    }
+}

@@ -227,6 +227,9 @@ comma after the last item:
     margin: 0,  // points between a window and the edge of the screen
   },
 
+  // Apps Zonas leaves alone, by bundle identifier. `zonas apps` prints them.
+  ignore: [],
+
   name: "Three Columns",
 
   // Editor in the middle, docs on the left, chat on the right.
@@ -252,6 +255,21 @@ Edit the file and pick **Reload Zones** from the menu bar. Notes:
 - When zones overlap, **the smallest one containing the cursor wins**. That is
   what makes a layout with one big background zone and smaller ones on top of
   it usable.
+- Anything in `ignore` is left alone completely: dragging one of its windows
+  with the key held shows no zones and snaps nothing. Matching is on the exact
+  bundle identifier, which `zonas apps` will print for you.
+
+### When a window does not go where you put it
+
+Some applications refuse to be as small as the zone you dropped them in —
+Chrome will not go below 500 points wide, WhatsApp not below 800. Zonas cannot
+overrule that, so it does the next best thing: the window keeps the size the app
+insisted on and is slid back far enough to stay on the screen, rather than
+hanging off the edge under the bezel. The log says which app did it and by how
+much.
+
+A window in **full screen** cannot be moved through the Accessibility API at
+all, and Zonas says so in the log instead of pretending the snap worked.
 
 ## From the command line
 
@@ -268,6 +286,7 @@ exits without ever starting the menu bar app:
 | `fmt [file]` | Rewrites the file in canonical form — aligned columns, comments kept. |
 | `fmt [file] --check` | Says whether it would rewrite it, and changes nothing. Exit 1 if it would. |
 | `monitors` | Name, size and display ID of every screen you have plugged in. |
+| `apps` | Bundle identifier of every app with a window open, ready to paste into `ignore`. |
 | `version`, `help` | |
 
 Give `check` and `fmt` a path to work on a file other than the installed one —

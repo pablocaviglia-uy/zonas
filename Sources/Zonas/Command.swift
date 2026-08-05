@@ -17,6 +17,7 @@ enum Command: String, CaseIterable {
     case check
     case fmt
     case monitors
+    case apps
     case help
     case version
 
@@ -39,6 +40,7 @@ enum Command: String, CaseIterable {
         case .check: return check(url ?? LayoutLocation().url)
         case .fmt: return format(url ?? LayoutLocation().url, writing: !rest.contains("--check"))
         case .monitors: return listMonitors()
+        case .apps: return listApps()
         case .help: return help()
         case .version: return printVersion()
         }
@@ -60,6 +62,11 @@ enum Command: String, CaseIterable {
                   + (layout.zones.count == 1 ? "" : "s")
                   + ", gap \(Int(layout.gap)), margin \(Int(layout.margin)), "
                   + "\(layout.modifier.symbol) \(layout.modifier.rawValue)")
+            if !layout.ignored.isEmpty {
+                print("ignoring \(layout.ignored.count) app"
+                      + (layout.ignored.count == 1 ? "" : "s")
+                      + ": " + layout.ignored.sorted().joined(separator: ", "))
+            }
 
             for warning in warnings(about: layout) { print("warning: \(warning)") }
             return 0
@@ -166,6 +173,54 @@ enum Command: String, CaseIterable {
         return 0
     }
 
+    // MARK: - apps
+
+    /// What to write in the `ignore` list, for the applications running now.
+    ///
+    /// This is `monitors`' argument one level down, and it is the same argument:
+    /// a rule matched on a bundle identifier is unwritable if the app never
+    /// tells you what the identifiers are, and nobody knows theirs by heart. §6
+    /// puts it as "config-first does not mean guess".
+    ///
+    /// It lists what is running rather than everything installed, because the
+    /// question this answers is always asked about an application that is on
+    /// screen and misbehaving.
+    private static func listApps() -> Int32 {
+        // Only the ones with a Dock icon and a menu bar. A `.accessory` process
+        // has no window anybody can drag, so listing forty of them would bury
+        // the six that can be answers.
+        let running = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
+
+        guard !running.isEmpty else {
+            print("zonas: nothing with a window is running")
+            return 1
+        }
+
+        let widest = running.map { ($0.localizedName ?? "").count }.max() ?? 0
+        for app in running {
+            let name = app.localizedName ?? "?"
+            let padding = String(repeating: " ", count: max(0, widest - name.count))
+            // A process with no bundle identifier cannot be put in the list at
+            // all, and saying so here is much cheaper than letting somebody
+            // discover it by writing a line that never matches.
+            guard let identifier = app.bundleIdentifier else {
+                print("\(name)\(padding)   (no bundle identifier — cannot be ignored)")
+                continue
+            }
+            print("\(name)\(padding)   \"\(identifier)\"")
+        }
+
+        print("")
+        print("Put the ones Zonas should leave alone in the ignore list:")
+        print("")
+        print("    ignore: [")
+        print("      \"\(running.first?.bundleIdentifier ?? "com.apple.Safari")\",")
+        print("    ],")
+        return 0
+    }
+
     // MARK: - the rest
 
     private static func printVersion() -> Int32 {
@@ -186,6 +241,7 @@ enum Command: String, CaseIterable {
             fmt [file]          rewrite the layout file in canonical form
             fmt [file] --check  say whether it would be rewritten, change nothing
             monitors            what to write in a rule, for the screens you have
+            apps                what to write in `ignore`, for the apps running now
             version
             help
 

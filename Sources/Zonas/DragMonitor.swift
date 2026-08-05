@@ -30,6 +30,10 @@ final class DragMonitor {
     private var isDragging = false
     private var isOverlayVisible = false
 
+    /// Whether the window this drag picked up belongs to an application the
+    /// file says to leave alone. It suppresses the overlay — see `handleDrag`.
+    private var isExcluded = false
+
     /// Whether somebody asked for the tap to be quiet — see `setEnabled`.
     ///
     /// It has to be remembered rather than read back off the port, because the
@@ -174,6 +178,7 @@ final class DragMonitor {
         overlay.hide()
         isOverlayVisible = false
         isDragging = false
+        isExcluded = false
         startPoint = nil
         draggedWindow = nil
         snapshot = nil
@@ -235,6 +240,11 @@ final class DragMonitor {
             // and nothing moves — so a line that says "no window identified"
             // and stops is a line that sends somebody to read the source.
             switch AXWindow.at(cgPoint: start) {
+            case .window(let window) where snapshot?.ignores(window.bundleID) == true:
+                draggedWindow = nil
+                isExcluded = true
+                Log.write("drag: leaving \(window.name) alone at \(describe(start))"
+                          + " — \(window.bundleID ?? "it") is in the file's ignore list")
             case .window(let window):
                 draggedWindow = window
                 Log.write("drag: \(window.name) at \(describe(start))")
@@ -248,7 +258,16 @@ final class DragMonitor {
         // apart is deliberate: if the preview appears but nothing snaps, the
         // problem is in the identification; if nothing appears at all, the
         // problem is earlier, in the tap or in the modifier.
-        if let layout = snapshot, event.flags.contains(layout.modifier.flags) {
+        //
+        // **An excluded application is the one exception**, and it is the
+        // opposite case rather than the same one. Everywhere else the overlay
+        // appears because Zonas does not yet know whether the drop will work;
+        // here it knows it will not, because it was told so in the file. Zones
+        // lighting up over a window that was never going to move is §3e's lying
+        // preview with a different cause — and unlike the diagnostic value of
+        // showing it when identification failed, there is nothing to diagnose:
+        // the user wrote the line.
+        if let layout = snapshot, !isExcluded, event.flags.contains(layout.modifier.flags) {
             guard let screen = NSScreen.containing(cgPoint: current) else { return }
             if !isOverlayVisible { Log.write("overlay: showing zones of \"\(layout.name)\"") }
             overlay.show(layout, cursor: current, on: screen)

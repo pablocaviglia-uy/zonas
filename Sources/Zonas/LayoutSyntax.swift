@@ -227,6 +227,18 @@ enum LayoutSyntax {
         let pad = String(repeating: "  ", count: indent)
 
         switch node {
+        // Nothing inside means nothing to lay out. Rendering `[]` across two
+        // lines is not wrong so much as it is not what anybody writes, and it
+        // started to matter the moment there was a key people would plausibly
+        // leave empty: `ignore` in a file that has stopped needing it. The
+        // canonical form has to be the form you would have typed, or `fmt`
+        // reformats a file every time somebody removes the last entry.
+        case .object(let members) where members.isEmpty:
+            out += "{}"
+
+        case .array(let elements) where elements.isEmpty:
+            out += "[]"
+
         case .object(let members):
             out += "{\n"
             for member in canonicallyOrdered(members, by: documentKeyOrder) {

@@ -71,6 +71,17 @@ enum LayoutFile {
         margin: 0,  // points between a window and the edge of the screen
       },
 
+      // Applications Zonas keeps its hands off, by bundle identifier. Dragging
+      // one of their windows with the key held does nothing at all — no zones,
+      // no snap — which is the point: some windows are the wrong shape for a
+      // layout and you already know which ones.
+      //
+      // `zonas apps` prints the identifier of everything with a window open
+      // right now, ready to paste in here. For example:
+      //
+      //     "com.apple.ActivityMonitor",
+      ignore: [],
+
       name: "Three Columns",
 
       // Editor in the middle, docs on the left, chat on the right. It is the

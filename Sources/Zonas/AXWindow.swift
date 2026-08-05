@@ -215,6 +215,14 @@ struct AXWindow {
         pid.flatMap(NSRunningApplication.init(processIdentifier:))
     }
 
+    /// What the file's `ignore` list matches on.
+    ///
+    /// `nil` for a process that has no bundle identifier, which is not
+    /// hypothetical — the Android emulator running on this machine is one. Such
+    /// a process cannot be excluded, and there is nothing to be done about that
+    /// short of matching on something worse.
+    var bundleID: String? { runningApplication?.bundleIdentifier }
+
     /// How the window is referred to in the log: the app, and the title when
     /// there is one.
     ///

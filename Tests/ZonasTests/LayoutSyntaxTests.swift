@@ -137,6 +137,19 @@ struct LayoutSyntaxTests {
         #expect(!rendered.contains("{ name: \"a\""))
     }
 
+    /// An empty collection has nothing to lay out over several lines, and
+    /// `ignore` is a key people will empty out again once they stop needing it.
+    /// If the canonical form were `[\n]`, `fmt` would reformat the file every
+    /// time somebody removed the last entry.
+    @Test("An empty list and an empty object stay on one line")
+    func emptyCollectionsStayInline() throws {
+        let rendered = LayoutSyntax.render(try LayoutSyntax.parse("{ ignore: [], defaults: {} }"))
+
+        #expect(rendered.contains("ignore: []"))
+        #expect(rendered.contains("defaults: {}"))
+        #expect(LayoutSyntax.render(try LayoutSyntax.parse(rendered)) == rendered)
+    }
+
     @Test("Numbers are written back exactly as they were typed")
     func numbersAreVerbatim() throws {
         let rendered = LayoutSyntax.render(try LayoutSyntax.parse("{ a: .25, b: 0.50, c: 1e3 }"))

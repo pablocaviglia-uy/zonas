@@ -136,6 +136,16 @@ struct Layout: Equatable {
     /// The key held down to summon the zones.
     var modifier: Modifier = .shift
 
+    /// Bundle identifiers of applications Zonas keeps its hands off.
+    ///
+    /// A `Set` and not an array, because the only question ever asked of it is
+    /// whether something is in it, and because two files that list the same
+    /// applications in a different order describe the same behaviour — which is
+    /// what `Layout: Equatable` is asked about every time the file is saved. The
+    /// file's own order is not lost by this: the writer renders from the tree,
+    /// which never stopped holding the list as it was typed.
+    var ignored: Set<String> = []
+
     static let defaultGap: CGFloat = 8
     static let defaultMargin: CGFloat = 0
 
@@ -232,6 +242,27 @@ struct Layout: Equatable {
     /// The zone itself, for the callers that do not care which one it is.
     func zone(under point: CGPoint, in area: CGRect) -> Zone? {
         zoneIndex(under: point, in: area).map { zones[$0] }
+    }
+
+    /// Whether this application is one the file says to leave alone.
+    ///
+    /// **Matching is exact**, on the bundle identifier and nothing else. An
+    /// identifier is already a stable, exact handle — matching on the localized
+    /// application name instead, which is what one of the tilers does, breaks
+    /// for everybody whose Mac is not in English, and this repository's author
+    /// works in Spanish: "System Settings" is "Ajustes del Sistema" here.
+    ///
+    /// Patterns are deliberately not supported *yet* rather than ruled out. A
+    /// bundle identifier is letters, digits, hyphens and dots, so an entry
+    /// containing `*` cannot collide with a real one and the door stays open to
+    /// give it a meaning later without changing what any existing file means.
+    ///
+    /// A process with no bundle identifier at all cannot be excluded, and there
+    /// are some — the Android emulator on this machine is one. Saying so here is
+    /// cheaper than the bug report.
+    func ignores(_ bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return ignored.contains(bundleID)
     }
 }
 
