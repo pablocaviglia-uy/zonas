@@ -1,5 +1,23 @@
 # Zonas
 
+### [⬇︎ Download Zonas for macOS](https://github.com/pablocaviglia-uy/zonas/releases/latest)
+
+[![latest release](https://img.shields.io/github/v/release/pablocaviglia-uy/zonas?label=latest&color=blue)](https://github.com/pablocaviglia-uy/zonas/releases/latest)
+[![downloads](https://img.shields.io/github/downloads/pablocaviglia-uy/zonas/total?color=blue)](https://github.com/pablocaviglia-uy/zonas/releases)
+![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue)
+![Apple Silicon and Intel](https://img.shields.io/badge/Apple%20Silicon%20%26%20Intel-universal-blue)
+[![MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
+
+That link goes to the newest version. On the page it opens, click the file
+ending in **`.dmg`** under *Assets* — that is the download. Then open it and
+drag Zonas onto the Applications folder. It is free, it is signed with an Apple
+Developer ID and notarized by Apple, and there is nothing to sign up for.
+
+Never used GitHub before? [The install section](#install) walks through the
+whole thing, including the part where nothing appears to happen.
+
+---
+
 **Your window layout is a file.** Not a preference pane, not a database in
 `~/Library` — a file you write, with comments in it, that goes in your dotfiles
 repo and gets symlinked wherever you want it.

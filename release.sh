@@ -434,19 +434,13 @@ if [[ -f "$DMG" ]]; then
     say "$(basename "$DMG") already exists, reusing it"
     say "(rebuilding it would change its cdhash and orphan its notarization ticket)"
 else
-    ROOT="$DIST/dmgroot"
-    rm -rf "$ROOT"; mkdir -p "$ROOT"
-    ditto "$APP" "$ROOT/Zonas.app"
-    # The alias is the whole point of shipping a .dmg: dragging the bundle in the
-    # Finder is what cancels App Translocation.
-    ln -s /Applications "$ROOT/Applications"
-
-    # HFS+ on purpose: an APFS image buys nothing here and is readable by fewer
-    # systems. UDZO with zlib-level=9 because the payload is 500 KB and the
-    # compression time is not measurable.
-    hdiutil create -volname "Zonas $VERSION" -srcfolder "$ROOT" -ov \
-        -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG"
-    rm -rf "$ROOT"
+    # `dmg.sh` and not `hdiutil create -srcfolder` here, because the alias is the
+    # whole point of shipping a .dmg — dragging the bundle in the Finder is what
+    # cancels App Translocation — and a window that opens as a plain file list
+    # does not say so. It lays the window out, which means it needs a real login
+    # session: the Finder is the only thing that writes the `.DS_Store` a disk
+    # image window is styled by, and there is no API for it.
+    "$RAIZ/dmg.sh" "$VERSION" "$APP" "$DMG"
 
     # --identifier because otherwise codesign derives it from the file name and
     # the disk image ends up identified as "Zonas-0" — different on every

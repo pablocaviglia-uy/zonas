@@ -940,7 +940,28 @@ viable.**
 Notarization, stapling, DMG, GitHub release, Homebrew cask, and the
 **first-launch window**.
 
-The first-launch window is the highest leverage per day in the whole plan. Today
+The first-launch window is the highest leverage per day in the whole plan.
+
+> **The disk image got its window, 2026-08-05.** `hdiutil create -srcfolder`
+> produces a working image and a hostile one — it opens as a plain file list,
+> with nothing saying that the thing to do is drag one icon onto the other. That
+> drag is not decoration: running from the mounted image or from `~/Downloads`
+> is App Translocation, which greys out Launch at Login forever and re-asks for
+> the Accessibility permission on every launch. `dmg.sh` lays the window out,
+> and the background is **drawn in code** (`Resources/dmg/background.swift`) so
+> it lives in the repository as the twenty lines that describe it rather than as
+> a binary nobody can edit. The motif is the product: the app sits in the left
+> zone, Applications in the right one, and the arrow crosses the middle.
+>
+> It has to run on a real login session, because the Finder is the only thing
+> that writes the `.DS_Store` a disk image window is styled by and there is no
+> API for it. Every project shipping a styled `.dmg` does this.
+>
+> And the README now opens with a download link, badges and three sentences of
+> plain instructions, because "go to Releases and find the asset" assumes a
+> familiarity with GitHub that most people downloading a menu bar utility do not
+> have.
+ Today
 a stranger installs, sees a dimmed icon, drags with Shift, nothing happens, and
 uninstalls: no UI tells them the permission is missing or what the gesture is,
 and they will not read the log. Budget 2 days for notarization, not 1.
