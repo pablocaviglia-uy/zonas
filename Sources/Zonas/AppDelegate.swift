@@ -11,6 +11,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var layoutWatcher: LayoutWatcher?
     private let monitor = DragMonitor()
     private let editor = EditorController()
+    private let welcome = WelcomeController()
+
+    /// The last thing `setState` was told, so that anything opening the welcome
+    /// window later can show the truth without asking the system again.
+    private var readiness: Welcome.Readiness = .denied
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // No Dock icon and no app menu: this lives in the menu bar, like Raycast
@@ -24,8 +29,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
         buildMenu()
         wireTheEditor()
+        wireTheWelcome()
         startMonitor()
         startWatchingTheLayout()
+
+        welcome.openIfFirstLaunch(readiness: readiness)
+        describeTheIcon()
+    }
+
+    /// Re-opening an app that is already running.
+    ///
+    /// **This is the only way back for somebody who cannot see the menu bar
+    /// icon**, and it is the sentence the welcome window is able to print
+    /// because of it. Without this, double-clicking Zonas in Applications does
+    /// nothing whatsoever — there is no Dock icon to bounce, no window to raise
+    /// and no menu to open — so the one instinct everybody has when an app seems
+    /// to have vanished leads nowhere. Both Rectangle and BetterDisplay point
+    /// their users at exactly this for exactly this reason.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        Log.write("welcome: opened again from the Finder")
+        welcome.open(readiness: readiness)
+        describeTheIcon()
+        return true
+    }
+
+    private func wireTheWelcome() {
+        welcome.onGrantPermission = { [weak self] in self?.openPermissions() }
+        welcome.onToggleLaunchAtLogin = { [weak self] on in
+            LaunchAtLogin.set(on)
+            self?.launchAtLoginItem?.state = LaunchAtLogin.isEnabled ? .on : .off
+        }
+    }
+
+    /// Tells the welcome window where the menu bar icon ended up, a second after
+    /// being asked.
+    ///
+    /// The delay is not politeness. `occlusionState` — the only signal that
+    /// tells the truth about whether macOS is drawing a status item — reports a
+    /// perfectly visible icon as hidden for the first ~80 ms of its life, and
+    /// takes about three quarters of a second to settle after the bar changes.
+    /// Both were measured. Asking immediately would tell every fresh install
+    /// that its icon is missing, which is the one thing this section exists to
+    /// get right.
+    private func describeTheIcon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self else { return }
+            let screen = self.statusItem?.button?.window?.screen ?? NSScreen.main
+            self.welcome.showIcon(self.statusItem, on: screen)
+            if self.statusItem?.isHiddenFromUser == true {
+                // Rule 9. Not a refusal, but the same shape: from outside the
+                // app "there is no icon" and "the app did not start" are the
+                // same picture.
+                Log.write("menu bar: macOS is not drawing our icon — the bar is full")
+            }
+        }
     }
 
     /// The one rule that neither the editor nor the drag monitor can hold on its
@@ -80,6 +137,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             // which is the one thing this app has spent a stage promising not
             // to do.
             self?.editor.refresh()
+            // The welcome window names the modifier and draws the zones, and
+            // both of those are in the file that just changed.
+            self?.welcome.refresh()
         }
         watcher.start()
         layoutWatcher = watcher
@@ -106,10 +166,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         Log.write("startup: login item = \(LaunchAtLogin.statusText)")
 
         if trusted, monitor.start() {
-            setActive(true)
+            setState(.working)
             return
         }
-        setActive(false)
+        // Two different failures, and they were the same call until now.
+        // `trusted` and the tap coming up are separate questions and the second
+        // one is the one that decides whether anything works — see
+        // `Welcome.Readiness`.
+        setState(Welcome.Readiness(trusted: trusted, tapIsLive: false))
         waitForPermission()
     }
 
@@ -142,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
             Log.write("permission: granted, starting the monitor")
             let started = self.monitor.start()
-            self.setActive(started)
+            self.setState(Welcome.Readiness(trusted: true, tapIsLive: started))
 
             // Watching only stops if the tap really came up alive. TCC can flip
             // the bit an instant before the tap subsystem honors it: if the
@@ -154,13 +218,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
     }
 
-    /// The menu bar icon looks dimmed while the permission is missing, so it is
-    /// visible that the app is alive but cannot do anything.
-    private func setActive(_ isActive: Bool) {
-        statusItem?.button?.appearsDisabled = !isActive
-        statusItem?.button?.toolTip = isActive
+    /// The one place that knows whether Zonas can do anything, and everything
+    /// that has to show it.
+    ///
+    /// The menu bar icon looks dimmed while it cannot, so it is visible that the
+    /// app is alive and unable to act. The tooltip used to say "the Accessibility
+    /// permission is missing" for both failures, which is a lie in one of them
+    /// and sends the reader to turn on a switch that is already on.
+    private func setState(_ readiness: Welcome.Readiness) {
+        self.readiness = readiness
+
+        statusItem?.button?.appearsDisabled = !readiness.isWorking
+        statusItem?.button?.toolTip = readiness.isWorking
             ? "Zonas: \(modifierHint.prefix(1).lowercased() + modifierHint.dropFirst())"
-            : "Zonas: the Accessibility permission is missing"
+            : "Zonas: \(readiness.headline.prefix(1).lowercased() + readiness.headline.dropFirst())"
+
+        // The window is told rather than asking, which is what keeps it from
+        // growing a second poller 1.5 s out of phase with this one.
+        welcome.update(readiness)
     }
 
     // MARK: - Menu bar
@@ -201,6 +276,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(launchItem)
 
         menu.addItem(ownItem("Accessibility Permissions…", #selector(openPermissions)))
+        // The welcome window opens itself once and then never again, which is
+        // right — and would strand the person who closed it before reading it,
+        // which is not. One line buys the way back.
+        menu.addItem(ownItem("Welcome to Zonas…", #selector(openWelcome)))
         menu.addItem(.separator())
 
         // No target: the action has to travel up the responder chain to NSApp,
@@ -228,6 +307,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     @objc private func openEditor() {
         editor.open()
+    }
+
+    @objc private func openWelcome() {
+        welcome.open(readiness: readiness)
+        describeTheIcon()
     }
 
     /// Here an alert **is** right, and the difference is who asked.
