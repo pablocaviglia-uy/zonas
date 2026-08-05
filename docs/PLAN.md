@@ -28,6 +28,15 @@ part that stops the next person from cheerfully undoing it.
 > that the shipped app could not identify Claude Desktop's window *anywhere on
 > the screen*, and that three of the five pieces §7 names are named wrongly. §10
 > gained two rules from it.
+>
+> **And the gesture itself changed on 2026-08-05**, which is not in any stage
+> either: it is bounded by the modifier now rather than by the mouse button, so
+> lifting a finger off the trackpad no longer ends it. Both that and the
+> multi-zone span are written up in §7 between Stage 4 and Stage 5. **What is
+> left before this is a product for a stranger is Stage 2's first-launch
+> window**, and after four releases it is now the largest gap by a distance —
+> everything else on the list widens the audience, that one is the difference
+> between installing Zonas and uninstalling it.
 
 **What works, end to end:** hold ⇧ while dragging a window, the zones light up,
 drop it and the window fills the one under the cursor. Zones are stored as
@@ -60,7 +69,7 @@ universal binary with `-u`.
 | `Signature.swift` | Logs the live process's cdhash and designated requirement. |
 | `Log.swift` | File log at `~/Library/Logs/Zonas.log`. |
 | `AppDelegate.swift` | Menu bar, permissions, wiring. |
-| `Tests/ZonasTests/` | 232 tests. `swift test`, and CI runs it on every push. |
+| `Tests/ZonasTests/` | 233 tests. `swift test`, and CI runs it on every push. |
 
 ### The release pipeline, corrected
 
@@ -920,7 +929,7 @@ plug/unplug". The second is another feature, it is expensive and fragile, and
 macOS has already moved your windows before you find out. Do not put them in the
 same promise.
 
-### Stage 4 — Window robustness · 4 days · **before the editor ships**
+### Stage 4 — Window robustness · 4 days · **complete**
 
 Subrole filtering in `AXWindow.at`, per-app minimum sizes, Electron and Java
 (`AXEnhancedUserInterface` has to be turned off during the move in

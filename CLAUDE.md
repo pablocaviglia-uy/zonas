@@ -41,7 +41,7 @@ lies, an alternative that was tried and failed.
 
 ```bash
 swift build          # compile
-swift test           # 232 tests; CI runs this on every push
+swift test           # 233 tests; CI runs this on every push
 ./build.sh           # wrap the binary in a signed .app
 ./build.sh release -r # ...and install it in /Applications and open it
 ```

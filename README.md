@@ -368,18 +368,25 @@ Roughly in the order they are being built. The reasoning behind the order — an
 behind most of the decisions in here — is written down in
 [`docs/PLAN.md`](docs/PLAN.md).
 
+- [ ] **A first-launch window.** Today a stranger installs Zonas, sees a small
+      grey icon appear in the menu bar, and has to read the release notes to
+      find out that the Accessibility permission is missing and what the gesture
+      is. This is the largest gap in the whole project and the next thing to be
+      built.
 - [ ] **Multiple layouts, and per-monitor rules.** Which layout goes on which
       screen, described by name, by glob, by minimum width — including monitors
       you do not have plugged in right now. A GUI can only offer a dropdown of
       what is attached today; a file can describe the office dock, the home
       dock, and the laptop on its own.
-- [ ] Respecting the minimum window size each app enforces. Right now Zonas asks
-      for the zone, the app quietly gives back something else, and the log says
-      so.
-- [ ] Electron, Java and other apps that do not cooperate with the
-      Accessibility API
+- [ ] Typing exact numbers in the editor, drawing a free overlapping zone, and
+      starter templates. The file already does all three.
 - [ ] A Homebrew cask, so `brew install --cask zonas` works
 - [ ] Automatic updates. Today a new version means downloading the `.dmg` again
+
+Done since the first release, and no longer on this list: apps that fight the
+Accessibility API — Electron, Chromium and JetBrains windows now move, and an
+app that refuses to shrink to its zone is kept on the screen instead of hanging
+off the edge.
 
 ## Contributing
 
