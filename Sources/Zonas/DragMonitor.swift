@@ -301,6 +301,9 @@ final class DragMonitor {
         // window lands exactly on the rectangle that was highlighted.
         let frame = layout.frame(of: target, in: area)
         Log.write("drop: snapping into \"\(target.name)\" \(frame)")
-        window.setFrame(frame)
+        // The usable area goes with it, because an app that refuses to shrink
+        // leaves a window wider than the zone, and a zone against the right-hand
+        // edge then puts the overhang under the bezel.
+        window.setFrame(frame, inside: area)
     }
 }

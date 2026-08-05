@@ -153,18 +153,19 @@ struct AXWindow {
             return "\(name) is in full screen, which cannot be moved through Accessibility"
         }
 
-        // And this is the one that does the work. Measured against every
-        // non-standard window on this machine: Notification Center's
-        // full-screen shield, its three banners and Teams' notification window
-        // all report a **settable position and a size that is not**, which is
-        // exactly the shape of a thing that is not a user's window.
+        // A window whose size is not settable used to be refused here, and that
+        // was wrong for the same reason the subrole allowlist was wrong. It is a
+        // good description of Notification Center's shield, its banners and
+        // Teams' notification window — every non-standard window on this
+        // machine reports a settable position and a size that is not — but it is
+        // an equally good description of Xcode's Welcome window and the iPhone
+        // Simulator, which people move around all day. `setFrame` places those
+        // without resizing them instead, which is a better answer than either
+        // refusing them or handing them a size they will throw away.
         //
-        // The position is deliberately not asked about. It is settable on
-        // practically everything, including elements nobody would call a window,
-        // so requiring it rejects nothing and only muddies the reason.
-        guard element.isSettable(kAXSizeAttribute) else {
-            return "\(name) will not be resized through Accessibility"
-        }
+        // The position is not asked about either. It is settable on practically
+        // everything, including elements nobody would call a window, so it
+        // rejects nothing and would only muddy the reason given.
         return nil
     }
 
@@ -240,30 +241,106 @@ struct AXWindow {
     /// gets positioned, resized, and positioned again: the second pass absorbs
     /// that rearrangement.
     ///
-    /// **The result is read back, and a difference goes in the log.** Nothing is
-    /// retried and nothing is corrected — an app that enforces a minimum size is
-    /// going to win, and honouring per-app minimums is a job of its own. What
-    /// this buys is that the failure stops being invisible: `setSize` returns
-    /// success having applied something else entirely, so until now "Xcode
-    /// ignores the width" was something you could only find out by measuring the
-    /// window by hand and comparing. Measured on this machine: asked for 424
-    /// wide, Xcode applied 600 and said yes.
+    /// **The result is read back, and an app that would not shrink gets slid
+    /// back onto the screen.** `setSize` returns success having applied
+    /// something else entirely, and the window then hangs off the side of the
+    /// zone — which for a zone against the right-hand edge means hanging off the
+    /// side of the screen, with the part you were reaching for underneath the
+    /// bezel.
+    ///
+    /// Floors measured on this machine, against the 428-point "Derecha" zone of
+    /// the layout in use: Chrome will not go below 500 wide, Claude 600,
+    /// WhatsApp 800, Xcode 600. Teams, Android Studio and iTerm2 take whatever
+    /// they are given.
+    ///
+    /// **§7 calls this piece "per-app minimum sizes", and that is the wrong
+    /// shape for the problem.** A number in the config file would be a second
+    /// copy of something the application already knows and already enforces, out
+    /// of date the first time anybody ships a new version, and there is nothing
+    /// useful to do with it that cannot be done better by asking and looking at
+    /// the answer. The Accessibility API has no attribute for a window's minimum
+    /// size, and it could not have a reliable one: an app is free to clamp in
+    /// `windowWillResize(_:to:)`, which is code, and runs after every constraint
+    /// a query API could see. Measuring by trying is not a workaround here, it
+    /// is the only thing that can be correct — and `differs(asked:applied:)` has
+    /// been sitting next to this function since two stages ago with nothing
+    /// acting on it.
+    ///
+    /// **A window that cannot be resized at all is placed rather than refused.**
+    /// Xcode's Welcome window and the iPhone Simulator move but do not resize,
+    /// and putting one where you dropped it is obviously better than declining
+    /// to touch it. Refusing was what this did for one commit, and it was the
+    /// wrong side of the same trade the subrole rule makes.
     @discardableResult
-    func setFrame(_ rect: CGRect) -> CGRect? {
-        withoutEnhancedUserInterface {
-            element.setPosition(rect.origin)
-            element.setSize(rect.size)
-            element.setPosition(rect.origin)
+    func setFrame(_ rect: CGRect, inside area: CGRect) -> CGRect? {
+        let resizable = element.isSettable(kAXSizeAttribute)
+        if !resizable {
+            Log.write("window: \(name) will not be resized, so it is only being moved")
         }
 
-        guard let applied = frame else { return nil }
+        var applied: CGRect?
+        var slidBack = false
+        // Every write is inside one toggle. Two would be two accessibility trees
+        // torn down and rebuilt for one drop.
+        withoutEnhancedUserInterface {
+            element.setPosition(rect.origin)
+            if resizable { element.setSize(rect.size) }
+            element.setPosition(rect.origin)
+
+            guard let got = frame else { return }
+            let settled = AXWindow.nudged(got, inside: area)
+            guard settled.origin != got.origin else { applied = got; return }
+            element.setPosition(settled.origin)
+            slidBack = true
+            applied = frame ?? settled
+        }
+
+        guard let applied else { return nil }
         guard AXWindow.differs(asked: rect, applied: applied) else { return applied }
 
+        // Three different things, and the line has to say which. The size the
+        // app insisted on is the app's doing; the origin, when it is not the
+        // one that was asked for, is *this function's* doing, and running the
+        // two together into one sentence reads as the app having moved the
+        // window somewhere odd.
         let floored = applied.width > rect.width || applied.height > rect.height
-        Log.write("window: asked for \(AXWindow.describe(rect))"
-                  + " — the app applied \(AXWindow.describe(applied))"
-                  + (floored ? " and will not go below that" : ""))
+        let outcome: String
+        if slidBack {
+            outcome = "the app would not go below \(AXWindow.describe(applied.size))"
+                + ", so it sits at \(AXWindow.describe(applied.origin)) to stay on the screen"
+        } else if floored {
+            outcome = "the app applied \(AXWindow.describe(applied)) and will not go below that"
+        } else {
+            outcome = "the app applied \(AXWindow.describe(applied))"
+        }
+        Log.write("window: asked for \(AXWindow.describe(rect)) — \(outcome)")
         return applied
+    }
+
+    /// A window pulled back far enough to be on the screen, and no further.
+    ///
+    /// **The zone's own origin is kept whenever it can be**, and the window is
+    /// only slid back by however much it overhangs. That is the rule because it
+    /// is the one somebody can predict: a window too wide for the right-hand
+    /// zone ends up flush with the right-hand edge of the screen, which is where
+    /// the zone was pointing.
+    ///
+    /// Centring the overflow on the zone instead was the other candidate. It
+    /// gives a prettier result for a zone in the middle and a worse one at every
+    /// edge — at the right-hand zone it pushes the window *further* off the
+    /// screen before the clamp has to drag it back, so the clamp is doing the
+    /// work either way and the centring only moves the window away from where it
+    /// was dropped.
+    ///
+    /// A window wider than the whole usable area goes flush to the left rather
+    /// than off the right: the `max` is applied last on purpose, so when the two
+    /// bounds contradict each other it is the near edge that wins. Anything else
+    /// puts the title bar somewhere you cannot reach it.
+    static func nudged(_ frame: CGRect, inside area: CGRect) -> CGRect {
+        CGRect(x: max(area.minX, min(frame.minX, area.maxX - frame.width)),
+               y: max(area.minY, min(frame.minY, area.maxY - frame.height)),
+               width: frame.width,
+               height: frame.height)
     }
 
     /// The name of the attribute an assistive application sets on another
@@ -343,7 +420,15 @@ struct AXWindow {
     }
 
     private static func describe(_ rect: CGRect) -> String {
-        "\(Int(rect.width))×\(Int(rect.height)) at (\(Int(rect.minX)), \(Int(rect.minY)))"
+        "\(describe(rect.size)) at \(describe(rect.origin))"
+    }
+
+    private static func describe(_ size: CGSize) -> String {
+        "\(Int(size.width))×\(Int(size.height))"
+    }
+
+    private static func describe(_ point: CGPoint) -> String {
+        "(\(Int(point.x)), \(Int(point.y)))"
     }
 }
 
