@@ -9,3 +9,4 @@ DerivedData/
 # signed artifacts it produces.
 .build-release/
 dist/
+Resources/Zonas.iconset/
