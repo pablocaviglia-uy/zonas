@@ -72,6 +72,7 @@ extension Layout {
                   gap: defaults.gap,
                   margin: defaults.margin,
                   modifier: defaults.modifier,
+                  span: defaults.span,
                   ignored: try Layout.ignored(members.first { $0.key == "ignore" }))
     }
 
@@ -120,8 +121,17 @@ extension Layout {
         var gap = Layout.defaultGap
         var margin = Layout.defaultMargin
         var modifier = Modifier.shift
+        var span: Modifier?
 
         init(_ member: LayoutSyntax.Member?) throws {
+            // Both keys are read before either is judged, because a file may
+            // write them in any order and "span is the same key as modifier" is
+            // not answerable until both have been seen.
+            var chosenSpan: (key: Modifier, line: Int)?
+            var modifierLine = member?.line ?? 0
+
+            defer { span = Defaults.resolveSpan(chosenSpan?.key, against: modifier) }
+
             guard let member else { return }
             guard case .object(let settings) = member.node else {
                 throw LayoutSchemaError(line: member.line,
@@ -132,10 +142,35 @@ extension Layout {
                 switch setting.key {
                 case "gap": gap = try points(setting)
                 case "margin": margin = try points(setting)
-                case "modifier": modifier = try key(setting)
+                case "modifier": modifier = try key(setting); modifierLine = setting.line
+                case "span": chosenSpan = (try key(setting), setting.line)
                 default: break   // a key from a newer version; the tree keeps it
                 }
             }
+
+            // One key cannot mean both "show me the zones" and "add this zone to
+            // the ones I already have". Saying so beats the alternative, which is
+            // a drag where every zone the cursor crosses joins the selection and
+            // no combination of keys can stop it.
+            if let chosenSpan, chosenSpan.key == modifier {
+                throw LayoutSchemaError(
+                    line: chosenSpan.line,
+                    message: "span cannot be \"\(modifier.rawValue)\", which is already the "
+                        + "modifier that shows the zones (line \(modifierLine)) — "
+                        + "pick a different one")
+            }
+        }
+
+        /// Which key gathers zones when the file does not say.
+        ///
+        /// `control` unless the drag itself was given to control, in which case
+        /// there is **no** span key until somebody chooses one. Defaulting into
+        /// a collision would turn a file that read perfectly well yesterday into
+        /// an error today, over a key its author never typed — and this is a
+        /// feature arriving in a version people are upgrading into.
+        private static func resolveSpan(_ chosen: Modifier?, against modifier: Modifier) -> Modifier? {
+            if let chosen { return chosen }
+            return modifier == .control ? nil : .control
         }
 
         private func points(_ member: LayoutSyntax.Member) throws -> CGFloat {

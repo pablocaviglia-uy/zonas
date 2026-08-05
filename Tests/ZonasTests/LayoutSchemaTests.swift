@@ -285,6 +285,92 @@ struct DefaultsTests {
     }
 }
 
+/// The second key, the one that gathers zones rather than choosing one.
+@Suite("The span key")
+struct SpanKeyTests {
+
+    private func layout(_ defaults: String) throws -> Layout {
+        try Layout(LayoutSyntax.parse("""
+        {
+          defaults: \(defaults),
+          name: "L",
+          zones: [ { name: "All", x: 0, y: 0, width: 1, height: 1 } ],
+        }
+        """))
+    }
+
+    @Test("With nothing said, it is control")
+    func defaultsToControl() throws {
+        #expect(try layout("{}").span == .control)
+        #expect(try layout(#"{ modifier: "shift" }"#).span == .control)
+    }
+
+    @Test("The file can name a different one")
+    func theFileChooses() throws {
+        #expect(try layout(#"{ span: "command" }"#).span == .command)
+    }
+
+    /// One key cannot mean both "show me the zones" and "add this one to the
+    /// ones I already have". Held together they would be indistinguishable, and
+    /// every zone the cursor crossed would join the selection with no way to
+    /// stop it.
+    @Test("It cannot be the same key as the modifier")
+    func itCannotCollide() throws {
+        let problem = #expect(throws: LayoutSchemaError.self) {
+            try Layout(LayoutSyntax.parse("""
+            {
+              defaults: {
+                modifier: "command",
+                span: "command",
+              },
+              name: "L",
+              zones: [ { name: "All", x: 0, y: 0, width: 1, height: 1 } ],
+            }
+            """))
+        }
+
+        #expect(problem?.line == 4, "the error points at span, which is the line to change")
+        #expect(problem?.message.contains("line 3") == true, "and it names the other one too")
+    }
+
+    /// The default must not turn a file that read perfectly well yesterday into
+    /// an error today over a key its author never typed. Somebody who took
+    /// control for the drag itself simply has no span key until they pick one.
+    @Test("Taking control for the drag leaves no span key, rather than an error")
+    func controlForTheDragIsNotAnError() throws {
+        let result = try layout(#"{ modifier: "control" }"#)
+
+        #expect(result.modifier == .control)
+        #expect(result.span == nil)
+    }
+
+    /// And if they do pick one, it is honoured.
+    @Test("...unless one is chosen anyway")
+    func butACho1ceIsStillHonoured() throws {
+        let result = try layout(#"{ modifier: "control", span: "option" }"#)
+
+        #expect(result.span == .option)
+    }
+
+    /// Key order in the file is free, so the collision has to be caught when
+    /// span is written first as well.
+    @Test("The collision is caught whichever key comes first")
+    func orderDoesNotMatter() throws {
+        #expect(throws: LayoutSchemaError.self) {
+            try layout(#"{ span: "shift", modifier: "shift" }"#)
+        }
+    }
+
+    @Test("A key it does not know is refused, with the list")
+    func nonsenseIsRefused() throws {
+        let problem = #expect(throws: LayoutSchemaError.self) {
+            try layout(#"{ span: "fn" }"#)
+        }
+
+        #expect(problem?.message.contains("\"control\"") == true)
+    }
+}
+
 /// The applications the file says to leave alone.
 @Suite("The ignore list")
 struct IgnoreListTests {

@@ -61,7 +61,9 @@ enum Command: String, CaseIterable {
             print("OK — \"\(layout.name)\", \(layout.zones.count) zone"
                   + (layout.zones.count == 1 ? "" : "s")
                   + ", gap \(Int(layout.gap)), margin \(Int(layout.margin)), "
-                  + "\(layout.modifier.symbol) \(layout.modifier.rawValue)")
+                  + "\(layout.modifier.symbol) \(layout.modifier.rawValue)"
+                  + (layout.span.map { " + \($0.symbol) \($0.rawValue) to span" }
+                     ?? ", no key to span with"))
             if !layout.ignored.isEmpty {
                 print("ignoring \(layout.ignored.count) app"
                       + (layout.ignored.count == 1 ? "" : "s")

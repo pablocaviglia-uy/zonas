@@ -153,3 +153,104 @@ struct HitTestingTests {
         #expect(layout.zone(under: CGPoint(x: 2000, y: 1400), in: area) == nil)
     }
 }
+
+/// Several zones taken together as one.
+///
+/// The layout is this desk's: four zones, a quarter-width column split in two on
+/// the left, a half in the middle, a quarter on the right.
+@Suite("Covering several zones at once")
+struct SpanTests {
+
+    private let layout = Layout(name: "Tres columnas", zones: [
+        Zone(name: "Izquierda Arriba", x: 0,    y: 0,   width: 0.25, height: 0.5),
+        Zone(name: "Izquierda Abajo",  x: 0,    y: 0.5, width: 0.25, height: 0.5),
+        Zone(name: "Centro",           x: 0.25, y: 0,   width: 0.5,  height: 1),
+        Zone(name: "Derecha",          x: 0.75, y: 0,   width: 0.25, height: 1),
+    ])
+    private let area = CGRect(x: 0, y: 33, width: 1728, height: 1084)
+
+    @Test("Nothing selected spans nothing")
+    func emptyIsNil() {
+        #expect(layout.union(of: []) == nil)
+    }
+
+    /// The ordinary gesture goes through the same call, so it has to come back
+    /// completely untouched — same name, same fractions, and therefore the same
+    /// rectangle as before any of this existed.
+    @Test("One zone is itself, exactly")
+    func oneIsItself() {
+        #expect(layout.union(of: [2]) == layout.zones[2])
+        #expect(layout.union(of: [2]).map { layout.frame(of: $0, in: area) }
+                == layout.frame(of: layout.zones[2], in: area))
+    }
+
+    @Test("Two zones stacked vertically become the column they make up")
+    func twoStackedBecomeAColumn() {
+        let union = layout.union(of: [0, 1])
+
+        #expect(union?.x == 0)
+        #expect(union?.y == 0)
+        #expect(union?.width == 0.25)
+        #expect(union?.height == 1)
+    }
+
+    @Test("Two side by side become the width of both")
+    func twoSideBySideBecomeWider() {
+        let union = layout.union(of: [2, 3])
+
+        #expect(union?.x == 0.25)
+        #expect(union?.width == 0.75)
+        #expect(union?.height == 1)
+    }
+
+    /// The bounding box, so a selection with a hole in it swallows the hole.
+    /// Choosing the top-left quarter and the right-hand column covers the middle
+    /// column and the bottom-left quarter as well, and that is the intended
+    /// answer rather than a bug: the alternative is explaining a contiguity rule
+    /// to somebody who is mid-drag with two keys held down.
+    @Test("A selection with a hole in it covers the hole")
+    func theBoundingBoxSwallowsTheGap() {
+        let union = layout.union(of: [0, 3])
+
+        #expect(union?.x == 0)
+        #expect(union?.y == 0)
+        #expect(union?.width == 1)
+        #expect(union?.height == 1)
+    }
+
+    /// Not the order they were gathered in. The same three zones have to produce
+    /// the same label however the cursor swept across them, or the log and the
+    /// overlay would disagree with themselves between two identical drags.
+    @Test("The name is joined in file order, not in the order they were visited")
+    func theNameIsDeterministic() {
+        #expect(layout.union(of: [3, 0, 2])?.name == layout.union(of: [0, 2, 3])?.name)
+        #expect(layout.union(of: [2, 0])?.name == "Izquierda Arriba + Centro")
+    }
+
+    /// The point of the whole design: a union is an ordinary `Zone`, so the gap
+    /// and margin rule applies to it once, at its outside edges, and the gaps
+    /// that used to be *between* the zones are gone. A window given "Izquierda
+    /// Arriba + Izquierda Abajo" must be one window as tall as the screen, not
+    /// two half-height ones with air in the middle.
+    @Test("The gaps inside a span disappear, and only the outer ones remain")
+    func theInnerGapsGoAway() {
+        let span = layout.union(of: [0, 1])!
+        let separately = layout.frame(of: layout.zones[0], in: area).height
+            + layout.frame(of: layout.zones[1], in: area).height
+
+        let spanned = layout.frame(of: span, in: area)
+
+        #expect(spanned.height > separately)
+        #expect(spanned.height == area.height)          // margin 0, both edges touch
+        #expect(spanned.width == layout.frame(of: layout.zones[0], in: area).width)
+    }
+
+    /// An index that is not in the layout cannot crash the drop path. It can
+    /// only get there if the file changes mid-drag, which the snapshot is
+    /// supposed to prevent — "supposed to" being the reason this is tested.
+    @Test("An index that is not in the layout is ignored")
+    func strayIndicesAreIgnored() {
+        #expect(layout.union(of: [2, 99]) == layout.zones[2])
+        #expect(layout.union(of: [99]) == nil)
+    }
+}

@@ -133,6 +133,23 @@ the one you want.
 Shift was chosen because Option is already taken by the native macOS tiling,
 and stepping on it would make the two features fight each other.
 
+### Covering more than one zone
+
+Hold **⌃ Control** as well, and the zones you drag across are *gathered* rather
+than chosen one at a time: the window is given all of them at once, as a single
+rectangle with no gap down the middle. Two quarter-height zones become one
+full-height column; a column and the one beside it become a two-thirds window.
+
+Everything the cursor crosses while Control is down joins the selection, so
+**let go of Control to start the selection over** — that is the way out of a
+sweep that picked up one zone too many. The highlight always shows the exact
+rectangle the window will get, so what you see is what you are about to have.
+
+A selection with a hole in it fills the hole: choosing the top-left zone and the
+right-hand column gives you everything between them. Change the key with
+`defaults.span` in the file, or take Control for the drag itself and the feature
+is simply not there until you name another key for it.
+
 The menu bar item — a `rectangle.split.3x1` glyph, dimmed while the permission
 is missing — has:
 
@@ -223,6 +240,7 @@ comma after the last item:
 
   defaults: {
     modifier: "shift",  // shift | control | option | command
+    span: "control",  // hold this too, to cover several zones at once
     gap: 8,  // points of air between two windows
     margin: 0,  // points between a window and the edge of the screen
   },

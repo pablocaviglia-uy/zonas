@@ -67,6 +67,10 @@ enum LayoutFile {
 
       defaults: {
         modifier: "shift",  // shift | control | option | command
+        // Hold this one as well and the zones you drag across are gathered
+        // instead of chosen: the window is given all of them at once. Let go of
+        // it to start the selection again.
+        span: "control",
         gap: 8,  // points of air between two windows
         margin: 0,  // points between a window and the edge of the screen
       },

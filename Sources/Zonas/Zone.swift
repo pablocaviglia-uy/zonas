@@ -136,6 +136,15 @@ struct Layout: Equatable {
     /// The key held down to summon the zones.
     var modifier: Modifier = .shift
 
+    /// The *second* key, held as well, that gathers zones instead of choosing
+    /// one — so a window can be given several zones' worth of screen.
+    ///
+    /// Optional because it has to be possible for there to be no such key: it
+    /// cannot be the same key as `modifier`, and somebody who took control for
+    /// the drag itself has to be free to leave this unset rather than be told
+    /// their file is broken by a default they never typed.
+    var span: Modifier? = .control
+
     /// Bundle identifiers of applications Zonas keeps its hands off.
     ///
     /// A `Set` and not an array, because the only question ever asked of it is
@@ -242,6 +251,42 @@ struct Layout: Equatable {
     /// The zone itself, for the callers that do not care which one it is.
     func zone(under point: CGPoint, in area: CGRect) -> Zone? {
         zoneIndex(under: point, in: area).map { zones[$0] }
+    }
+
+    /// Several zones taken together, as **one zone**.
+    ///
+    /// This is the whole of the spanning feature, and the reason it costs almost
+    /// nothing: a zone is four fractions of the screen, so the union of several
+    /// of them is min/max arithmetic over those fractions, and what comes back
+    /// is another `Zone`. Everything downstream — `frame(in:gap:margin:)` with
+    /// its rule about which sides give up a gap and which give up the margin,
+    /// the overlay, the drop, the clamp that keeps an oversized window on
+    /// screen — works on it unchanged, because none of them ever knew where a
+    /// zone came from.
+    ///
+    /// It is the **bounding box**, so a selection with a hole in it swallows the
+    /// hole. That is what FancyZones does too, and the alternative — refusing a
+    /// non-contiguous selection — would mean explaining a rule at the exact
+    /// moment somebody is mid-drag with two keys held down.
+    ///
+    /// The name is joined in **file order** rather than in the order the zones
+    /// were visited, so the same three zones always produce the same label and
+    /// the same line in the log however you swept across them.
+    func union(of indices: Set<Int>) -> Zone? {
+        let chosen = indices.sorted().filter(zones.indices.contains).map { zones[$0] }
+        guard let first = chosen.first else { return nil }
+        guard chosen.count > 1 else { return first }
+
+        let minX = chosen.map(\.x).min()!
+        let minY = chosen.map(\.y).min()!
+        let maxX = chosen.map { $0.x + $0.width }.max()!
+        let maxY = chosen.map { $0.y + $0.height }.max()!
+
+        return Zone(name: chosen.map(\.name).joined(separator: " + "),
+                    x: minX,
+                    y: minY,
+                    width: maxX - minX,
+                    height: maxY - minY)
     }
 
     /// Whether this application is one the file says to leave alone.

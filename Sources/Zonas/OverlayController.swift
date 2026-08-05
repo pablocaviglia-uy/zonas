@@ -16,10 +16,10 @@ final class OverlayController {
     private var currentDisplay: CGDirectDisplayID?
 
     /// What is on screen right now, so that an event that changes nothing does
-    /// nothing. See `show(_:cursor:on:)`.
-    private var shown: (layout: Layout, activeIndex: Int?)?
+    /// nothing. See `show(_:selecting:on:)`.
+    private var shown: (layout: Layout, selection: Set<Int>)?
 
-    /// Shows the zones of one layout and highlights the one under the cursor.
+    /// Shows the zones of one layout and highlights the selection.
     ///
     /// The layout arrives as an argument rather than being read from the store,
     /// and that is the point: a drag holds one layout still from beginning to
@@ -28,11 +28,18 @@ final class OverlayController {
     /// race with a very wide window once the file watcher is live, because the
     /// whole gesture lasts seconds and a save takes none.
     ///
+    /// **The selection is drawn as one rectangle, not as several.** It is the
+    /// union — the exact rectangle the window is about to be given — and the
+    /// zones inside it are not drawn at all. Lighting up three zones separately
+    /// would show three rounded rectangles with gaps between them and a window
+    /// would then land on the single rectangle around all of it: §3e's lying
+    /// preview, arriving by a new door.
+    ///
     /// - Parameters:
     ///   - layout: the layout this drag is working against.
-    ///   - point: cursor position in CG coordinates.
+    ///   - selection: indices into `layout.zones`; empty highlights nothing.
     ///   - screen: the screen the drag is happening on.
-    func show(_ layout: Layout, cursor point: CGPoint, on screen: NSScreen) {
+    func show(_ layout: Layout, selecting selection: Set<Int>, on screen: NSScreen) {
         guard let display = screen.displayID else {
             // Documented as always present. If it ever is not, saying so beats
             // drawing on a screen we cannot tell apart from another one.
@@ -43,7 +50,6 @@ final class OverlayController {
         currentDisplay = display
 
         let area = screen.cgVisibleFrame
-        let activeIndex = layout.zoneIndex(under: point, in: area)
 
         let window = window(for: screen, display: display)
         guard let view = window.contentView as? ZoneOverlayView else { return }
@@ -54,10 +60,10 @@ final class OverlayController {
         // tap callback, and a tap that takes too long is one the system turns
         // off — which is what `tapDisabledByTimeout` up in DragMonitor exists to
         // notice.
-        if window.isVisible, let shown, shown.layout == layout, shown.activeIndex == activeIndex {
+        if window.isVisible, let shown, shown.layout == layout, shown.selection == selection {
             return
         }
-        shown = (layout, activeIndex)
+        shown = (layout, selection)
 
         // Zones are computed in CG and then converted to view coordinates, which
         // are the window's: origin bottom-left and relative to its own frame.
@@ -65,16 +71,25 @@ final class OverlayController {
         // What gets drawn is `frame`, not `rect`: the frame is the rectangle the
         // window is going to be given, and the preview showing anything else is
         // the preview lying.
-        view.zones = layout.viewFrames(in: area).enumerated().map { index, rect in
-            ZoneOverlayView.Box(
-                rect: rect,
-                name: layout.zones[index].name,
-                // By index. Two zones with the same geometry are a thing people
-                // write in a config file, and comparing rectangles would light
-                // up both of them.
-                isActive: index == activeIndex
-            )
+        //
+        // The selected ones are left out of this pass and replaced by their
+        // union below. Selection is by **index**: two zones with the same
+        // geometry are a thing people write in a config file, and comparing
+        // rectangles would light up both of them.
+        var boxes = layout.viewFrames(in: area).enumerated()
+            .filter { !selection.contains($0.offset) }
+            .map { index, rect in
+                ZoneOverlayView.Box(rect: rect, name: layout.zones[index].name, isActive: false)
+            }
+
+        // Last, so it is drawn over the zones it covers.
+        if let target = layout.union(of: selection) {
+            boxes.append(ZoneOverlayView.Box(
+                rect: Coords.cgToView(layout.frame(of: target, in: area), filling: area),
+                name: target.name,
+                isActive: true))
         }
+        view.zones = boxes
 
         window.orderFrontRegardless()
     }

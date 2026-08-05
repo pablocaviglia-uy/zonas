@@ -60,7 +60,7 @@ universal binary with `-u`.
 | `Signature.swift` | Logs the live process's cdhash and designated requirement. |
 | `Log.swift` | File log at `~/Library/Logs/Zonas.log`. |
 | `AppDelegate.swift` | Menu bar, permissions, wiring. |
-| `Tests/ZonasTests/` | 217 tests. `swift test`, and CI runs it on every push. |
+| `Tests/ZonasTests/` | 232 tests. `swift test`, and CI runs it on every push. |
 
 ### The release pipeline, corrected
 
@@ -1205,6 +1205,68 @@ rides on.
   callback, and that is a bigger change than the whole of this stage.
 - **Nothing tells the user any of this.** All of it lands in the log. The window
   that would say it out loud is Stage 2's.
+
+### Not in any stage — covering several zones at once
+
+**Added 2026-08-05, asked for by name.** It is FancyZones' gesture: hold a second
+key during the drag and the zones you cross are *gathered* instead of chosen, so
+the window is given all of them as one rectangle. It is on no list in this
+document, and it is written down here because the next person will otherwise
+wonder which stage it belongs to. The answer is none — it was requested, it took
+an afternoon, and the reason it took an afternoon is worth keeping.
+
+**The union of several zones is another `Zone`, and that is the entire trick.**
+A zone is four fractions of the screen, so a union is min/max arithmetic over
+those fractions and what comes back has the same type as what went in. Every
+line downstream — `frame(in:gap:margin:)` and its rule about which sides give up
+a gap and which give up the margin, `viewFrames`, the overlay, the drop, Stage
+4's clamp — works on it without knowing anything happened. Nothing in this
+feature does geometry. Had `Zone` been a rectangle in points rather than
+fractions, all of that would have needed a second implementation, and the one
+that mattered most is the gap rule: the gaps *between* the gathered zones have
+to vanish while the ones at the outside edge stay, and that falls out for free
+from computing the union first and insetting once.
+
+**The overlay draws the union, not the members.** Lighting up three zones
+separately shows three rounded rectangles with air between them, and then the
+window lands on the single rectangle around all of it — §3e's lying preview
+arriving through a new door. There is one highlighted box and it is the frame
+the window is about to be given.
+
+**Releasing the key clears the selection**, and that decision is the whole
+usability of the gesture. Gathering is additive, because a sweep has to be
+predictable and toggling-on-re-entry means dragging back across your own
+selection destroys it. Additive on its own has no way out: overshoot by one zone
+and the only escape is abandoning the drag. Letting go of the key and starting
+again is that way out, and it costs one line.
+
+**The key is configurable and therefore can collide.** `defaults.span` defaults
+to `control`; naming the same key as `defaults.modifier` is a schema error with
+both line numbers, because one key cannot mean "show me the zones" and "add this
+one to the ones I have" at once — held together, every zone the cursor crossed
+would join the selection with no combination of keys able to stop it. The
+default resolves to *nothing* when `modifier` is already `control`, rather than
+to an error: a feature arriving in an upgrade must not turn a file that read
+perfectly well yesterday into a broken one over a key its author never typed.
+
+**The tap now listens to `.flagsChanged`.** Until now the only way to find out a
+modifier had moved was to wait for the next mouse event — hold the window still,
+press ⇧, and nothing happened until you twitched. That was a wart for the drag
+modifier and is fatal for this one, because pressing a second key with the
+cursor already parked where you want it *is* the gesture. It is not a keyboard
+tap: `.flagsChanged` carries no character and no key code, which is also the
+honest answer to what an open-source app is listening to.
+
+Verified on this machine with three synthetic drags against the real layout:
+⇧ alone into the bottom-left zone gave `428x538@(0,579)`; ⇧ then ⌃ swept down
+the left-hand column gave `428x1084@(0,33)` and logged `snapping into
+"Izquierda Arriba + Izquierda Abajo"`; and gathering both, then releasing ⌃ and
+dropping on the right, gave `Derecha` alone.
+
+The first attempt at that test also proved the design honest by accident: it
+held ⌃ from the first event, swept across the middle of the screen, and got
+`"Izquierda Arriba + Izquierda Abajo + Centro"` — everything the cursor had
+touched, exactly as specified.
 
 ### Stage 5 — The visual editor · 12 days
 

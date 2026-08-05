@@ -34,6 +34,18 @@ final class DragMonitor {
     /// file says to leave alone. It suppresses the overlay — see `handleDrag`.
     private var isExcluded = false
 
+    /// The zones gathered so far, by index into the frozen layout.
+    ///
+    /// Empty means the ordinary gesture — whatever is under the cursor right
+    /// now, and nothing remembered. It fills up only while the span key is held,
+    /// and **releasing that key empties it again**, which is the whole way out of
+    /// a selection you did not mean: overshoot by one zone, let go, start over.
+    /// Without it the only escape from a wrong selection would be to abandon the
+    /// drag, because gathering is additive and passing back over a zone a second
+    /// time does not remove it. Additive is what makes a sweep predictable; the
+    /// escape hatch is what makes additive survivable.
+    private var gathered: Set<Int> = []
+
     /// Whether somebody asked for the tap to be quiet — see `setEnabled`.
     ///
     /// It has to be remembered rather than read back off the port, because the
@@ -64,7 +76,20 @@ final class DragMonitor {
         // everything. One line prevents that.
         stop()
 
-        let events: [CGEventType] = [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        // `.flagsChanged` is in here so that pressing or releasing a modifier
+        // **without moving the mouse** is noticed. Everything this app reacts to
+        // is a modifier plus a drag, and until now the only way to find out that
+        // a key had gone down was to wait for the next mouse event: hold the
+        // window still, press ⇧, and nothing happened until you twitched. With
+        // the span key that stops being a wart and becomes unusable, because
+        // gathering zones is exactly the gesture where you press a second key
+        // with the cursor already parked where you want it.
+        //
+        // It is not a keyboard tap. `.flagsChanged` carries no character and no
+        // key code this app reads — only which modifiers are down — which is
+        // also the honest answer to "does this open-source thing listen to
+        // everything I type".
+        let events: [CGEventType] = [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .flagsChanged]
         let mask = events.reduce(into: CGEventMask(0)) { $0 |= 1 << $1.rawValue }
 
         guard let tap = CGEvent.tapCreate(
@@ -179,6 +204,7 @@ final class DragMonitor {
         isOverlayVisible = false
         isDragging = false
         isExcluded = false
+        gathered = []
         startPoint = nil
         draggedWindow = nil
         snapshot = nil
@@ -200,6 +226,14 @@ final class DragMonitor {
 
         case .leftMouseUp:
             handleDrop(event)
+
+        // A modifier moved while the button is down. `event.location` is the
+        // cursor's current position for any event type, so this is the same work
+        // a drag event would have done — which is the point: pressing the
+        // modifier and moving the mouse are two ways of changing the same
+        // answer, and only one of them used to be heard.
+        case .flagsChanged:
+            if isDragging { handleDrag(event) }
 
         // The system disables the tap if it takes too long to respond. When
         // that happens it has to be re-enabled or the app goes deaf forever.
@@ -270,7 +304,9 @@ final class DragMonitor {
         if let layout = snapshot, !isExcluded, event.flags.contains(layout.modifier.flags) {
             guard let screen = NSScreen.containing(cgPoint: current) else { return }
             if !isOverlayVisible { Log.write("overlay: showing zones of \"\(layout.name)\"") }
-            overlay.show(layout, cursor: current, on: screen)
+            overlay.show(layout, selecting: selection(for: layout, at: current, on: screen,
+                                                     flags: event.flags),
+                         on: screen)
             isOverlayVisible = true
         } else if isOverlayVisible {
             // Letting go of the modifier before the mouse button cancels the
@@ -282,6 +318,28 @@ final class DragMonitor {
             overlay.hide()
             isOverlayVisible = false
         }
+    }
+
+    /// Which zones the drop will use, updated on every event.
+    ///
+    /// **The overlay and the drop both go through here**, so the rectangle you
+    /// are shown and the rectangle the window is given cannot come apart. That
+    /// is not caution for its own sake: the whole point of the gesture is that
+    /// the selection is built up out of sight of any single event, and a second
+    /// copy of "which zones are chosen" would be a second chance to build it
+    /// differently.
+    private func selection(for layout: Layout,
+                           at point: CGPoint,
+                           on screen: NSScreen,
+                           flags: CGEventFlags) -> Set<Int> {
+        let under = layout.zoneIndex(under: point, in: screen.cgVisibleFrame)
+
+        guard let span = layout.span, flags.contains(span.flags) else {
+            gathered = []
+            return under.map { [$0] } ?? []
+        }
+        if let under { gathered.insert(under) }
+        return gathered
     }
 
     private func describe(_ p: CGPoint) -> String {
@@ -311,7 +369,12 @@ final class DragMonitor {
             return
         }
         let area = screen.cgVisibleFrame
-        guard let target = layout.zone(under: event.location, in: area) else {
+        // The same computation the overlay was drawn from, not a fresh one: with
+        // the span key held this is several zones gathered over the length of the
+        // gesture, and asking "what is under the cursor" again here would throw
+        // all of them away at the last moment.
+        let chosen = selection(for: layout, at: event.location, on: screen, flags: event.flags)
+        guard let target = layout.union(of: chosen) else {
             Log.write("drop: the cursor didn't land inside any zone")
             return
         }
