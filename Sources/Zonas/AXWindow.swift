@@ -250,9 +250,11 @@ struct AXWindow {
     /// wide, Xcode applied 600 and said yes.
     @discardableResult
     func setFrame(_ rect: CGRect) -> CGRect? {
-        element.setPosition(rect.origin)
-        element.setSize(rect.size)
-        element.setPosition(rect.origin)
+        withoutEnhancedUserInterface {
+            element.setPosition(rect.origin)
+            element.setSize(rect.size)
+            element.setPosition(rect.origin)
+        }
 
         guard let applied = frame else { return nil }
         guard AXWindow.differs(asked: rect, applied: applied) else { return applied }
@@ -262,6 +264,69 @@ struct AXWindow {
                   + " — the app applied \(AXWindow.describe(applied))"
                   + (floored ? " and will not go below that" : ""))
         return applied
+    }
+
+    /// The name of the attribute an assistive application sets on another
+    /// application to ask it for a fuller accessibility tree.
+    ///
+    /// It is a string literal because it is in no public header, which is also
+    /// why it is easy to have never heard of.
+    private static let enhancedUserInterface = "AXEnhancedUserInterface"
+
+    /// Runs the frame writes with the application's enhanced accessibility
+    /// turned off, and puts it back exactly as it was found.
+    ///
+    /// **With that attribute set, `kAXSizeAttribute` is ignored.** Not delayed,
+    /// not animated, not clamped — ignored, while the position is applied
+    /// normally and every call returns success. Measured on this machine by
+    /// setting the flag the way an assistive application would and asking for a
+    /// 432 × 700 rectangle:
+    ///
+    /// ```
+    ///                    flag on          flag off
+    /// Google Chrome      1728x1079        500x700   (Chrome's own floor)
+    /// Microsoft Teams    1728x1084        432x700   exactly as asked
+    /// WhatsApp            856x1084        800x700   (its own floor)
+    /// Android Studio     1728x1084        432x700   exactly as asked
+    /// Firefox            1728x1084        500x700   (its own floor)
+    /// iTerm2             1728x1084        432x700   exactly as asked
+    /// ```
+    ///
+    /// **§7 calls this an Electron and Chrome problem and that is wrong.**
+    /// iTerm2 and Android Studio fail exactly as completely as Chrome does,
+    /// which is what the right-hand column above is for: this is AppKit's
+    /// accessibility path, not any application's quirk, and a list of affected
+    /// bundle identifiers would be a list of every application there is. So
+    /// there is no list, and nothing here asks who the app is.
+    ///
+    /// **It is only touched when it is already on.** Nothing in Zonas sets it,
+    /// and it was `false` on all 49 processes running on this machine — with
+    /// Zonas itself running, holding Accessibility permission, and with
+    /// Hammerspoon running too. Whoever turns it on is some other assistive
+    /// application on the user's machine, and the point of this is that Zonas
+    /// keeps working next to them rather than silently losing the ability to
+    /// resize anything.
+    ///
+    /// **And it is put back.** Turning it off is somebody else's setting being
+    /// overridden, and leaving it off degrades whatever asked for it. Chromium
+    /// is on record that the re-enable is the expensive edge — it rebuilds the
+    /// accessibility tree, and "in extreme cases can result in the browser
+    /// becoming non-responsive" (bug 1364487) — which is an argument for not
+    /// doing this on every mouse move, and this runs once, on the drop.
+    ///
+    /// A failure to write it is not worth handling: some Electron builds refuse
+    /// with `kAXErrorNotImplemented`, and an app that will not turn the flag off
+    /// is an app that was not going to be affected by it.
+    private func withoutEnhancedUserInterface(_ body: () -> Void) {
+        guard let pid else { return body() }
+        let application = AXUIElementCreateApplication(pid)
+        guard application.flag(AXWindow.enhancedUserInterface) == true else { return body() }
+
+        Log.write("window: \(name) has enhanced accessibility on,"
+                  + " which makes the size silently ignored — turning it off for the move")
+        application.setFlag(AXWindow.enhancedUserInterface, false)
+        defer { application.setFlag(AXWindow.enhancedUserInterface, true) }
+        body()
     }
 
     /// Whether what the app applied is far enough from what was asked to be
@@ -360,6 +425,10 @@ extension AXUIElement {
         var point = point
         guard let value = AXValueCreate(.cgPoint, &point) else { return }
         AXUIElementSetAttributeValue(self, kAXPositionAttribute as CFString, value)
+    }
+
+    fileprivate func setFlag(_ name: String, _ value: Bool) {
+        AXUIElementSetAttributeValue(self, name as CFString, value as CFTypeRef)
     }
 
     fileprivate func setSize(_ size: CGSize) {
