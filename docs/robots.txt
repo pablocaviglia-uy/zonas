@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://pablocaviglia-uy.github.io/zonas/sitemap.xml

@@ -13,6 +13,9 @@ ending in **`.dmg`** under *Assets* — that is the download. Then open it and
 drag Zonas onto the Applications folder. It is free, it is signed with an Apple
 Developer ID and notarized by Apple, and there is nothing to sign up for.
 
+There is a plain website too, if it is easier to read than this page:
+**[pablocaviglia-uy.github.io/zonas](https://pablocaviglia-uy.github.io/zonas/)**
+
 Never used GitHub before? [The install section](#install) walks through the
 whole thing, including the part where nothing appears to happen.
 
