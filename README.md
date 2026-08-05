@@ -4,9 +4,9 @@
 `~/Library` — a file you write, with comments in it, that goes in your dotfiles
 repo and gets symlinked wherever you want it.
 
-Hold **⇧ Shift** while dragging a window, the zones light up, drop it and the
-window fills the one under the cursor. Edit the file, save, and the zones change
-underneath you. (*zonas* is Spanish for *zones*.)
+Hold **⇧ Shift** while dragging a window, the zones light up, and letting go of
+⇧ over one fills it. Edit the file, save, and the zones change underneath you.
+(*zonas* is Spanish for *zones*.)
 
 ```js
 // ~/.config/zonas/zonas.json5
@@ -37,15 +37,11 @@ It is for people who liked
 from PowerToys on Windows, and for people who would rather write their window
 layout once and take it to every machine they own.
 
-<!--
-  DEMO GIF GOES HERE.
-  Two halves, and the second one is the pitch: a window being dragged with
-  Shift held — zones appearing, the one under the cursor highlighting, the
-  window snapping on release — and then the file being edited in vim,
-  saved, and the zones changing without touching the app.
-  Then replace this comment with:
-  ![Zonas snapping a window into a zone](docs/demo.gif)
--->
+![The layout file being edited, and a window snapping into the zones it
+describes](docs/demo.gif)
+
+*The file is edited and saved — nothing is clicked, nothing is restarted — and
+the next drag lands in the layout it just described.*
 
 **The visual editor is a client of the file, not a second way to store your
 zones.** Drag a divider and the file changes — your comments where you left
@@ -110,9 +106,9 @@ Within a second and a half the menu bar icon stops looking dimmed, on its own.
 That is the only confirmation there is, and it is the one to wait for.
 
 Now hold **⇧ Shift** and drag any window. Three zones light up — a quarter, a
-half, a quarter — and dropping the window fills whichever one is under the
-cursor. Those three are just the layout it starts with; they live in a file you
-can edit, see [The zones](#the-zones).
+half, a quarter — and letting go of ⇧ fills whichever one is under the cursor.
+Those three are just the layout it starts with; they live in a file you can
+edit, see [The zones](#the-zones).
 
 There is no automatic update yet. New versions are announced on the Releases
 page, and installing one is the same drag over the old copy — the Accessibility
@@ -154,10 +150,10 @@ the secondary click, so pressing it first turns the whole thing into a
 right-click and nothing happens. Press, drag, then add Control.
 
 Watch out for one more thing: ⇧ and ⌃ are next to each other, and reaching for
-the second one with the same hand tends to lift the first. Letting go of the
-drag modifier cancels the snap on purpose — it is how you back out — so a slip
-throws the gathered selection away and you land in a single zone. If that keeps
-happening, `defaults.span: "command"` puts the second key under the other thumb.
+the second one with the same hand tends to lift the first — which now *places*
+the window rather than cancelling, so a slip lands it in whatever single zone
+the cursor was over. If that keeps happening, `defaults.span: "command"` puts
+the second key under the other thumb.
 
 Everything the cursor crosses while Control is down joins the selection, so
 **let go of Control to start the selection over** — that is the way out of a

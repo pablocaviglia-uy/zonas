@@ -838,7 +838,7 @@ feature is unusable. Config-first does not mean guess.
 A "day" is a real, focused working day. With a job in the way, roughly half a
 calendar week. **Every stage ships on its own.**
 
-### Stage 1 — "The file is really the truth" · 8 days · **complete except the GIF**
+### Stage 1 — "The file is really the truth" · 8 days · **complete**
 
 | Piece | Days | |
 |---|---|---|
@@ -848,7 +848,7 @@ calendar week. **Every stage ships on its own.**
 | Migration `layout.json` v0 → `zonas.json5` v1 with backup; XDG paths with an ambiguity error | 1 | **done** |
 | `gap`/`margin`/`modifier` actually honoured (fixes the lying preview) | 0.5 | **done** |
 | Icon in alerts + `zonas check` / `fmt` / `monitors` | 0.5 | **done** |
-| README split into user and contributor + demo GIF | 0.5 | split **done**; GIF pending |
+| README split into user and contributor + demo GIF | 0.5 | **done** |
 
 **`$XDG_CONFIG_HOME` was implemented and then removed**, which is the only
 reason the problem was found. A GUI app on macOS is launched by Finder or
@@ -887,6 +887,37 @@ the future, is the distinction that makes a migration different from a copy.
 touching it, which is the guarantee in practice; the compiler-enforced version
 belongs with a Swift 6 language mode migration, which is a piece of its own and
 is not on this list yet.
+
+> **Recorded 2026-08-05**, and the four minutes of it that were not recording
+> are the part worth keeping. Nothing needed installing: `SCScreenshotManager`
+> for the frames and ImageIO's animated-GIF encoder, which already elides
+> unchanged frames — verified, 100 identical frames come to 24 KB against 20 KB
+> for one, so no dirty-rectangle work is called for. Two consecutive captures of
+> a still screen differ in 0.02% of pixels, which also kills the theory that the
+> file size is capture noise: it is motion, and the motion is the point.
+>
+> **Capture at 1200 points wide, not 800.** GitHub's README column is 838 CSS
+> pixels at dpr 2, so anything narrower is upscaled and the file's text goes
+> soft — which for this GIF is the whole content.
+>
+> **The choreography is posted events, not a hand**, so a take is repeatable and
+> can be re-shot after any correction. Three corrections were needed and none was
+> guessable: a drag that reads to a machine is over before an eye finds the
+> zones, so it opens on stillness and pauses once when the zones appear; the
+> window has to snap into a zone that does **not** cover the file, or the frame
+> that proves the point is the frame that hides it; and the demo layout must be
+> one whose numbers change visibly, which is why it is quarters becoming thirds.
+>
+> **What cost the most was privacy, and it took four attempts.** The desktop is
+> the demo, and each rehearsal caught something different: the sidebar of an
+> open app listing client names and ticket ids; two private Google Sheets URLs
+> sitting in a code editor being used as a backdrop; a notification banner
+> arriving mid-take, in the corner the highlighted zone was in. The rule that
+> came out of it: **the backdrop must be built out of windows the recording
+> created**, and every frame gets looked at before anything is committed. There
+> is a check for the third one — Notification Center's banners are `AXUnknown`
+> windows in the top-right corner, and counting them before and after a take is
+> five lines.
 
 The demo GIF is worth its own line, because the thing to film only started
 working today: editing the file in vim and watching the zones move. That is the
