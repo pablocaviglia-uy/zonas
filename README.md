@@ -1,6 +1,6 @@
 # Zonas
 
-### [⬇︎ Download Zonas for macOS](https://github.com/pablocaviglia-uy/zonas/releases/latest)
+### [⬇︎ Download Zonas for macOS](https://github.com/pablocaviglia-uy/zonas/releases/latest/download/Zonas.dmg)
 
 [![latest release](https://img.shields.io/github/v/release/pablocaviglia-uy/zonas?label=latest&color=blue)](https://github.com/pablocaviglia-uy/zonas/releases/latest)
 [![downloads](https://img.shields.io/github/downloads/pablocaviglia-uy/zonas/total?color=blue)](https://github.com/pablocaviglia-uy/zonas/releases)
@@ -8,10 +8,13 @@
 ![Apple Silicon and Intel](https://img.shields.io/badge/Apple%20Silicon%20%26%20Intel-universal-blue)
 [![MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
-That link goes to the newest version. On the page it opens, click the file
-ending in **`.dmg`** under *Assets* — that is the download. Then open it and
-drag Zonas onto the Applications folder. It is free, it is signed with an Apple
-Developer ID and notarized by Apple, and there is nothing to sign up for.
+That downloads the newest version straight away — no GitHub page to work out,
+nothing to sign up for. Open the file it saves and drag Zonas onto the
+Applications folder. It is free, signed with an Apple Developer ID and notarized
+by Apple.
+
+If you would rather see the release notes and the checksums first, they are on
+the [Releases page](https://github.com/pablocaviglia-uy/zonas/releases).
 
 There is a plain website too, if it is easier to read than this page:
 **[pablocaviglia-uy.github.io/zonas](https://pablocaviglia-uy.github.io/zonas/)**

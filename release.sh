@@ -552,10 +552,24 @@ icon appearing in the menu bar.
   \$EDITOR dist/notes.md
   git tag -a v$VERSION -m "Zonas $VERSION"
   git push origin v$VERSION
-  gh release create v$VERSION "$DMG" --draft --verify-tag \\
+  cp "$DMG" "$DIST/Zonas.dmg"
+  gh release create v$VERSION "$DMG" "$DIST/Zonas.dmg" --draft --verify-tag \\
       --title "Zonas $VERSION" --notes-file dist/notes.md
   # download the asset from the draft, check it opens, and only then:
   gh release edit v$VERSION --draft=false --latest
+
+The second asset is the same file under a name that never changes, and it is
+what makes a direct download link possible:
+
+  https://github.com/pablocaviglia-uy/zonas/releases/latest/download/Zonas.dmg
+
+GitHub resolves /releases/latest/download/<name> to the newest release, but only
+by exact file name — so a versioned name cannot be linked from a website or a
+README without editing them on every release. Uploading both keeps the version
+visible on the Releases page and in ~/Downloads for whoever browses there, and
+gives the download button a URL that never goes stale. Notarization does not care
+about the name: the ticket is stapled to the code, so a renamed copy passes spctl
+unchanged. That was verified rather than assumed.
 
 --draft first is not ceremony: with immutable releases turned on, a published
 asset can no longer be replaced or deleted. The draft is the last chance to
