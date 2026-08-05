@@ -127,8 +127,16 @@ to the particular build.
 
 ## Using it
 
-Hold **⇧ Shift** while dragging a window. The zones appear; drop the window on
-the one you want.
+Hold **⇧ Shift** while dragging a window. The zones appear; **let go of ⇧ over
+the one you want** and the window fills it. Press **⎋ Escape** to leave
+everything where it was.
+
+Letting go of the mouse button does not end anything, which matters on a
+trackpad: a drag there is one continuous press with nowhere to rest, so lifting
+a finger to reposition it used to throw the whole gesture away and snap the
+window wherever the cursor happened to be. Now you can let go, move, take hold
+again, and the zones stay up the whole time. The snap happens when ⇧ does —
+or, if you let go of ⇧ first, when you release the button.
 
 Shift was chosen because Option is already taken by the native macOS tiling,
 and stepping on it would make the two features fight each other.

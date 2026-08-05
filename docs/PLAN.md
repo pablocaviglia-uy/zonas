@@ -1305,6 +1305,53 @@ carries how long the zones had been up and whether the news came from the mouse
 or from a key, which is what tells the two apart — the original report could not
 be reproduced on demand, and the six drags recorded while trying were all clean.
 
+#### The gesture stopped ending at the mouse button
+
+**Added 2026-08-05, and it is the fix for the report below** — which was real,
+was not a bug in any line of code, and took four wrong diagnoses to reach.
+
+A trackpad drag is one continuous press with nowhere to rest. Lifting a finger
+to reposition it is not optional on a small pad, and until now every lift ended
+the gesture: the zones vanished and the window snapped wherever the cursor
+happened to be at that instant. Measured on the machine, the shape of it was a
+57 ms click followed 147 ms later by the real hold, nine times in a row.
+
+So the gesture is now bounded by the **modifier**, not by the button:
+
+| | before | now |
+|---|---|---|
+| button released | commits, gesture over | pauses; zones stay, window stays put |
+| cursor moves, button up | nothing | the highlight follows it |
+| modifier released | cancels | **commits** |
+| ⎋ | — | cancels |
+
+**The commit waits for the last of the two.** Releasing the modifier while the
+button is still down does not snap, because macOS is still dragging the window
+and the snap would be undone a frame later by the window continuing to follow
+the cursor. Whichever of the two goes last is the end of the gesture, and that
+makes the answer the same whichever order the user does it in.
+
+**The cancel had to move.** Letting go of the modifier was the way out and is
+now the way to commit, so ⎋ takes over. That needs `keyDown`, and following the
+cursor with the button up needs `mouseMoved` — neither of which belongs in a tap
+that is alive all the time. They go in **a second tap created when the zones
+appear and destroyed when they go**, which is the shape §7's Stage 3 had already
+settled on for the same reason: outside of a gesture, Zonas cannot see either
+one.
+
+**The selection became state rather than a computation.** It used to be derived
+from the event that committed, which worked only while that event was the drop.
+The committing event is now the modifier coming *up* — by definition without the
+modifier held — so deriving from it would clear any gathered span and answer
+with the single zone under the cursor. What gets committed is the last thing
+that was drawn, which is the only answer that cannot disagree with the screen.
+
+One consequence worth knowing: the identification of the window has to be
+guarded by "the zones are not already up". A gesture that survives the button
+walks back through the threshold check on the next event after a lift — the
+cursor is long past eight points by then — and would look up whatever is under
+the cursor *now*, which after a lift is the desktop.
+
 #### The cancellation that was not one
 
 The report that followed — *"holding shift it starts the selection and after no

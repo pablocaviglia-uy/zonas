@@ -308,9 +308,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// and nothing happens at all.
     private var modifierHint: String {
         let layout = LayoutStore.shared.layout
-        let drag = "Hold \(layout.modifier.symbol) while dragging a window"
+        let key = layout.modifier.symbol
+        let drag = "Drag a window with \(key), let \(key) go to place it"
         guard let span = layout.span else { return drag }
-        return "\(drag), then \(span.symbol) to cover several zones"
+        return "\(drag) — \(span.symbol) covers several zones"
     }
 
     /// Leaves the item greyed out in the `.build/` copy. Without this `NSMenu`

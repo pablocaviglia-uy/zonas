@@ -25,10 +25,47 @@ final class DragMonitor {
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
+    /// A second tap, alive **only** while a snap is being composed.
+    ///
+    /// It exists because the gesture no longer ends when the button does. Once
+    /// the finger is off the trackpad the cursor still has to be followed, and
+    /// `mouseMoved` is the only event that says where it went; and Escape has to
+    /// be heard, which means `keyDown`.
+    ///
+    /// Both are things this app has no business seeing when nothing is
+    /// happening. A permanent tap on every mouse movement and every keystroke is
+    /// exactly the uncomfortable question an open-source window manager should
+    /// not invite, and §7's Stage 3 already settles the shape of the answer for
+    /// the same reason: a second tap, created when a gesture starts and torn
+    /// down when it ends. Outside of a drag, Zonas cannot see either one.
+    private var sessionTap: CFMachPort?
+    private var sessionSource: CFRunLoopSource?
+
     private var startPoint: CGPoint?
     private var draggedWindow: AXWindow?
     private var isDragging = false
+
+    /// Whether the zones are on screen — which is the same thing as *a snap is
+    /// being composed right now*, and the reason there is no second flag.
     private var isOverlayVisible = false
+
+    /// Whether the mouse button is down, tracked because it is no longer what
+    /// ends the gesture and so can no longer be inferred from being called.
+    private var isButtonDown = false
+
+    /// The zones the snap will use, kept as state rather than recomputed.
+    ///
+    /// It has to be state now: the gesture commits when the **modifier** is
+    /// released, and by the time that event arrives the modifier is by
+    /// definition no longer held — so asking "what is selected" from the
+    /// committing event would answer with the modifier down and throw away
+    /// everything gathered. What is committed is the last thing that was drawn,
+    /// which is the only answer that cannot disagree with the screen.
+    private var selected: Set<Int> = []
+
+    /// The usable area of the screen the selection was made on, frozen with it
+    /// for the same reason.
+    private var selectionArea: CGRect?
 
     /// Whether the window this drag picked up belongs to an application the
     /// file says to leave alone. It suppresses the overlay — see `handleDrag`.
@@ -145,6 +182,10 @@ final class DragMonitor {
         }
         tap = nil
         runLoopSource = nil
+        // The gesture tap outlives the main one otherwise, which would leave the
+        // app watching every mouse movement and every keystroke with nothing
+        // left that could ever close it.
+        stopListeningForTheRest()
         overlay.hide()
     }
 
@@ -201,10 +242,13 @@ final class DragMonitor {
     /// existed, against a window that was identified for it.
     private func forgetTheDrag() {
         overlay.hide()
+        stopListeningForTheRest()
         isOverlayVisible = false
         isDragging = false
         isExcluded = false
         gathered = []
+        selected = []
+        selectionArea = nil
         // Cleared, or "the button came up N ms after the last movement" reports
         // the gap since the *previous* gesture's last movement for any gesture
         // that never moved — a number that looks like a measurement, is not one,
@@ -217,6 +261,61 @@ final class DragMonitor {
         snapshot = nil
     }
 
+    // MARK: - The tap that only exists during a gesture
+
+    /// Starts listening to bare mouse movement and to Escape.
+    ///
+    /// Neither belongs in the permanent tap. `mouseMoved` fires whenever the
+    /// pointer moves at all, which is most of the time a Mac is switched on, and
+    /// `keyDown` is every keystroke on the machine — for a menu bar app that
+    /// somebody has to trust with the Accessibility permission, having those
+    /// arrive only between the start of a drag and its snap is worth the two
+    /// system calls it costs.
+    ///
+    /// A failure is not fatal and is not treated as one: the gesture still works
+    /// exactly as it did before this existed, you simply cannot move the cursor
+    /// with the button up or press Escape. Refusing the whole drag over it would
+    /// be a worse trade.
+    private func beginListeningForTheRest() {
+        guard sessionTap == nil else { return }
+
+        let events: [CGEventType] = [.mouseMoved, .keyDown]
+        let mask = events.reduce(into: CGEventMask(0)) { $0 |= 1 << $1.rawValue }
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .listenOnly,
+            eventsOfInterest: mask,
+            callback: { _, type, event, context in
+                guard let context else { return Unmanaged.passUnretained(event) }
+                let monitor = Unmanaged<DragMonitor>.fromOpaque(context).takeUnretainedValue()
+                monitor.handle(type: type, event: event)
+                return Unmanaged.passUnretained(event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            Log.write("tap: could not open the gesture tap — the cursor will not"
+                      + " be followed with the button up, and Escape will not cancel")
+            return
+        }
+
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        sessionTap = tap
+        sessionSource = source
+    }
+
+    private func stopListeningForTheRest() {
+        if let sessionTap { CGEvent.tapEnable(tap: sessionTap, enable: false) }
+        if let sessionSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), sessionSource, .commonModes)
+        }
+        sessionTap = nil
+        sessionSource = nil
+    }
+
     // MARK: - Events
 
     /// The tap runs on the main run loop, so this is already on the UI thread
@@ -226,38 +325,55 @@ final class DragMonitor {
         case .leftMouseDown:
             // Deliberately not logged. A line here is a line for every click
             // anywhere on the machine, which buries the file — the same reason
-            // `mouseDragged` is not logged. `pressedAt` gives the drop what that
-            // line was wanted for, which is how long the gesture lasted.
+            // `mouseDragged` is not logged.
+            isButtonDown = true
             pressedAt = DispatchTime.now()
             startPoint = event.location
-            draggedWindow = nil
-            isDragging = false
+            // A press **during** a live gesture is somebody taking hold again
+            // after lifting their finger, so the window already chosen is kept.
+            // Looking one up afresh would find whatever is under the cursor now,
+            // which after a lift is usually not the window being moved.
+            if !isOverlayVisible {
+                draggedWindow = nil
+                isDragging = false
+            }
 
         case .leftMouseDragged:
             lastMovedAt = DispatchTime.now()
             handleDrag(event)
 
+        // **The button coming up no longer ends anything.** It used to be the
+        // whole gesture: press, drag, release, snap. But a trackpad drag is one
+        // continuous press with no way to pause, and lifting a finger to
+        // reposition it — measured on this machine as a click of 57 ms followed
+        // 147 ms later by the real hold — threw the entire gesture away. The
+        // zones vanished and the window snapped wherever the cursor happened to
+        // be, which is precisely what "it cancels after a second and picks the
+        // current zone" was.
         case .leftMouseUp:
-            handleDrop(event)
+            isButtonDown = false
+            isDragging = false
+            commitIfFinished(at: event.location, flags: event.flags)
 
-        // A modifier moved while the button is down. `event.location` is the
-        // cursor's current position for any event type, so this is the same work
-        // a drag event would have done — which is the point: pressing the
-        // modifier and moving the mouse are two ways of changing the same
-        // answer, and only one of them used to be heard.
-        //
-        // **A key can bring the zones up but never take them down**, and the
-        // asymmetry is deliberate. Showing has to be instant because the user is
-        // waiting to see it. Hiding does not: a modifier that comes up while the
-        // hand is still is at least as likely to be a finger on its way to the
-        // second key as it is to be somebody changing their mind, and blanking
-        // the screen for the 40 ms it takes is a flicker with no information in
-        // it. Whatever the release meant, the next mouse movement will act on
-        // it — and if there is no next movement, the drop below reads the keys
-        // itself. Measured: a 40 ms gap posted between two drag events used to
-        // hide the zones and bring them straight back.
+        // A modifier moved. `event.location` is the cursor's current position
+        // for any event type, so this is the same work a drag event would do —
+        // which is the point: pressing the modifier and moving the mouse are two
+        // ways of changing the same answer, and only one of them used to be
+        // heard.
         case .flagsChanged:
-            if isDragging { handleDrag(event) }
+            if isDragging || isOverlayVisible { handleDrag(event) }
+
+        // From the session tap, and only ever while a gesture is live. Once the
+        // button is up this is the only thing that says where the cursor went.
+        case .mouseMoved:
+            if isOverlayVisible { update(at: event.location, flags: event.flags) }
+
+        // Escape, and nothing else is read. It is the only way out now that
+        // letting go of the modifier commits rather than cancels.
+        case .keyDown:
+            if isOverlayVisible, event.getIntegerValueField(.keyboardEventKeycode) == 53 {
+                abandon("Escape")
+            }
 
         // The system disables the tap if it takes too long to respond. When
         // that happens it has to be re-enabled or the app goes deaf forever.
@@ -281,7 +397,12 @@ final class DragMonitor {
         guard let start = startPoint else { return }
         let current = event.location
 
-        if !isDragging {
+        // The window is identified once per gesture, and a gesture now survives
+        // the button. Without `!isOverlayVisible` here, the first modifier or
+        // movement after a lift walks back in through this branch — the cursor
+        // is long past the threshold by then — and looks up whatever is under it
+        // now, which after a lift is the desktop or the window underneath.
+        if !isDragging, !isOverlayVisible {
             let distance = hypot(current.x - start.x, current.y - start.y)
             guard distance >= dragThreshold else { return }
             isDragging = true
@@ -325,36 +446,60 @@ final class DragMonitor {
         // preview with a different cause — and unlike the diagnostic value of
         // showing it when identification failed, there is nothing to diagnose:
         // the user wrote the line.
-        if let layout = snapshot, !isExcluded, event.flags.contains(layout.modifier.flags) {
-            guard let screen = NSScreen.containing(cgPoint: current) else { return }
-            if !isOverlayVisible {
-                shownAt = DispatchTime.now()
-                Log.write("overlay: showing zones of \"\(layout.name)\"")
-            }
-            overlay.show(layout, selecting: selection(for: layout, at: current, on: screen,
-                                                     flags: event.flags),
-                         on: screen)
-            isOverlayVisible = true
-        } else if isOverlayVisible, event.type != .flagsChanged {
-            // Letting go of the modifier before the mouse button cancels the
-            // snap, on purpose — it is how you back out of a drag you did not
-            // mean to make. It used to do it without a word, so from the log a
-            // cancelled drag and a broken drop looked exactly the same: an
-            // overlay that appeared and no drop after it.
-            //
-            // It now also says what it saw and how long the overlay had been up.
-            // "The modifier was released" is a conclusion, and the two things it
-            // could be hiding are a person changing their mind and a key
-            // bouncing for forty milliseconds on the way to another one — which
-            // look identical in the old wording and want opposite fixes.
-            Log.write("overlay: hidden after \(DragMonitor.elapsed(since: shownAt))"
-                      + ", the modifier was released"
-                      + " — nothing will snap (\(DragMonitor.describe(event.flags))"
-                      + ", from \(DragMonitor.describe(type: event.type)))")
-            gathered = []
-            overlay.hide()
-            isOverlayVisible = false
+        update(at: current, flags: event.flags)
+    }
+
+    /// Draws the zones, keeps the selection current, and commits when the
+    /// gesture is over.
+    ///
+    /// Everything that can change the answer comes through here — a drag, a
+    /// modifier, a bare mouse movement once the button is up — so the rectangle
+    /// on screen and the rectangle the window is given cannot come apart.
+    private func update(at point: CGPoint, flags: CGEventFlags) {
+        // The overlay shows even when no window was identified. Keeping the two
+        // apart is deliberate: if the preview appears but nothing snaps, the
+        // problem is in the identification; if nothing appears at all, the
+        // problem is earlier, in the tap or in the modifier.
+        //
+        // **An excluded application is the one exception**, and it is the
+        // opposite case rather than the same one. Everywhere else the overlay
+        // appears because Zonas does not yet know whether the drop will work;
+        // here it knows it will not, because it was told so in the file. Zones
+        // lighting up over a window that was never going to move is §3e's lying
+        // preview with a different cause — and unlike the diagnostic value of
+        // showing it when identification failed, there is nothing to diagnose:
+        // the user wrote the line.
+        guard let layout = snapshot, !isExcluded, flags.contains(layout.modifier.flags) else {
+            commitIfFinished(at: point, flags: flags)
+            return
         }
+        guard let screen = NSScreen.containing(cgPoint: point) else { return }
+
+        if !isOverlayVisible {
+            shownAt = DispatchTime.now()
+            Log.write("overlay: showing zones of \"\(layout.name)\"")
+            beginListeningForTheRest()
+        }
+        selectionArea = screen.cgVisibleFrame
+        selected = selection(for: layout, at: point, on: screen, flags: flags)
+        overlay.show(layout, selecting: selected, on: screen)
+        isOverlayVisible = true
+    }
+
+    /// Snaps, once the gesture is actually over.
+    ///
+    /// **It is over when the last of the two goes**: the modifier and the
+    /// button. Which one is last is the user's business — letting go of the key
+    /// while still holding the window is as ordinary as the other way round —
+    /// and waiting for both is what makes the answer the same either way.
+    ///
+    /// Committing on the modifier alone would fire while macOS is still dragging
+    /// the window, so the snap would land and the window would immediately go
+    /// back to following the cursor: a snap that undoes itself.
+    private func commitIfFinished(at point: CGPoint, flags: CGEventFlags) {
+        guard isOverlayVisible, let layout = snapshot else { return }
+        guard !isButtonDown, !flags.contains(layout.modifier.flags) else { return }
+        commit(at: point)
     }
 
     /// Which zones the drop will use, updated on every event.
@@ -429,109 +574,52 @@ final class DragMonitor {
         }
     }
 
-    private func handleDrop(_ event: CGEvent) {
+    /// Puts the window where the zones said it would go.
+    ///
+    /// The selection is **not** recomputed here. It is whatever was last drawn,
+    /// because the event that gets us here is the modifier coming up and by then
+    /// the modifier is not held — recomputing would clear any gathered span and
+    /// answer with the single zone under the cursor, which is not what the user
+    /// was looking at when they let go.
+    private func commit(at point: CGPoint) {
         defer { forgetTheDrag() }
 
-        guard isOverlayVisible else { return }
+        Log.write("commit: after \(DragMonitor.elapsed(since: shownAt)) of choosing"
+                  + " (\(DragMonitor.elapsed(since: pressedAt)) since the button went down)")
 
-        // Who ended the gesture, and where the event came from.
-        //
-        // **`.hidSystemState` and not `.combinedSessionState`**: the combined
-        // state counts events other processes have posted as though a finger had
-        // done it, so it answers "up" for a synthesised release just as happily
-        // as for a real one — which is the exact distinction this was written to
-        // make, and the first version of this line got it wrong.
-        //
-        // `eventSourceUnixProcessID` names the posting process when there is
-        // one — but **zero does not mean "the hardware"**, which is what this
-        // comment used to claim: the window server's own synthesised events
-        // carry zero too. `eventSourceStateID` is the one that separates them,
-        // answering 1 for a real HID event. Both are printed, because a claim
-        // this line cannot support is worse than no line.
-        //
-        // The witness that cannot be faked by any process is the window server's
-        // own log, which records the trackpad's press and release decisions:
-        //
-        //     log show --last 5m --info --debug --predicate \
-        //       'subsystem == "com.apple.Multitouch"'
-        //
-        // A `Button event(mask=0) ... from HostAlgs-Button` with `Touching=0`
-        // beside it is a finger leaving the pad. That is what settled this.
-        //
-        // It earned its place answering "Zonas cancels my drag after a second":
-        // every release turned out to come from the hardware, ten to sixteen
-        // milliseconds after the last pointer movement — a finger leaving the
-        // trackpad mid-swipe, on a Mac with tap-to-click, drag lock and
-        // three-finger drag all switched off. Nothing was cancelling anything;
-        // the drag was ending because the button was. No line in the log could
-        // have said that before, and the wrong answer was two hours away.
-        //
-        // It sits **after** the guard above on purpose. Before it, every stray
-        // click anywhere on the machine wrote three lines into a log whose whole
-        // discipline is that it records state transitions rather than events.
-        let physicallyDown = CGEventSource.buttonState(.hidSystemState, button: .left)
-        let source = event.getIntegerValueField(.eventSourceUnixProcessID)
-        let poster = NSRunningApplication(processIdentifier: pid_t(source))?.localizedName ?? "unknown"
-        let stateID = event.getIntegerValueField(.eventSourceStateID)
-        let origin = source == 0
-            ? (stateID == 1 ? "the hardware" : "pid 0, source state \(stateID) — NOT the hardware")
-            : "pid \(source) (\(poster))"
-        Log.write("drop: after \(DragMonitor.elapsed(since: pressedAt)), the button came up"
-                  + " \(DragMonitor.elapsed(since: lastMovedAt)) after the last movement,"
-                  + " from \(origin); the finger is physically "
-                  + (physicallyDown ? "STILL ON THE BUTTON — this release was not the user's" : "off"))
-
-        // The same layout that was drawn, not whatever is in the store now.
-        //
-        // Unreachable when it fails: the snapshot is taken before the overlay
-        // can appear, and the overlay being up is what got us past the guard
-        // above. It logs anyway, because a silent `return` in the drop path is
-        // the kind of thing that costs an afternoon the day it does happen.
         guard let layout = snapshot else {
-            Log.write("drop: the overlay was up with no layout behind it")
+            // Unreachable: the snapshot is taken before the zones can appear.
+            // It logs anyway, because a silent `return` on the path that moves
+            // somebody's window is the kind of thing that costs an afternoon the
+            // day it does happen.
+            Log.write("commit: the zones were up with no layout behind them")
             return
         }
-
-        // **The keys on the mouse-up decide, not the picture on the screen.**
-        // Letting go of the modifier before the button is how you back out of a
-        // drag, and until now that worked only because releasing it had already
-        // hidden the overlay. Once a key on its own stopped being allowed to
-        // hide anything — see `.flagsChanged` above — the overlay can still be
-        // up at the moment of a deliberate cancel, and the cancel would snap the
-        // window instead. Asking the event that ends the gesture is both the fix
-        // and the more honest question: the drop is the decision, so the drop is
-        // where the state that decides it should be read.
-        guard event.flags.contains(layout.modifier.flags) else {
-            Log.write("drop: the modifier was not held at the drop — nothing snapped")
-            return
-        }
-
         guard let window = draggedWindow else {
-            Log.write("drop: there was a zone but no window to move")
+            Log.write("commit: there was a zone but no window to move")
             return
         }
-        guard let screen = NSScreen.containing(cgPoint: event.location) else {
-            Log.write("drop: the cursor didn't land on any screen")
-            return
-        }
-        let area = screen.cgVisibleFrame
-        // The same computation the overlay was drawn from, not a fresh one: with
-        // the span key held this is several zones gathered over the length of the
-        // gesture, and asking "what is under the cursor" again here would throw
-        // all of them away at the last moment.
-        let chosen = selection(for: layout, at: event.location, on: screen, flags: event.flags)
-        guard let target = layout.union(of: chosen) else {
-            Log.write("drop: the cursor didn't land inside any zone")
+        guard let area = selectionArea, let target = layout.union(of: selected) else {
+            Log.write("commit: nothing was selected — nothing snapped")
             return
         }
 
         // The same call the overlay drew a moment ago, which is the point: the
         // window lands exactly on the rectangle that was highlighted.
         let frame = layout.frame(of: target, in: area)
-        Log.write("drop: snapping into \"\(target.name)\" \(frame)")
+        Log.write("commit: snapping into \"\(target.name)\" \(frame)")
         // The usable area goes with it, because an app that refuses to shrink
         // leaves a window wider than the zone, and a zone against the right-hand
         // edge then puts the overhang under the bezel.
         window.setFrame(frame, inside: area)
+    }
+
+    /// Ends the gesture with nothing moved.
+    ///
+    /// This is the only way out now. Letting go of the modifier used to be it,
+    /// and letting go of the modifier is what commits.
+    private func abandon(_ why: String) {
+        Log.write("commit: abandoned after \(DragMonitor.elapsed(since: shownAt)) — \(why)")
+        forgetTheDrag()
     }
 }
