@@ -217,11 +217,17 @@ final class DragMonitor {
     private func handle(type: CGEventType, event: CGEvent) {
         switch type {
         case .leftMouseDown:
+            // Deliberately not logged. A line here is a line for every click
+            // anywhere on the machine, which buries the file — the same reason
+            // `mouseDragged` is not logged. `pressedAt` gives the drop what that
+            // line was wanted for, which is how long the gesture lasted.
+            pressedAt = DispatchTime.now()
             startPoint = event.location
             draggedWindow = nil
             isDragging = false
 
         case .leftMouseDragged:
+            lastMovedAt = DispatchTime.now()
             handleDrag(event)
 
         case .leftMouseUp:
@@ -370,6 +376,20 @@ final class DragMonitor {
         "(\(Int(p.x)), \(Int(p.y)))"
     }
 
+    /// When the last actual mouse movement arrived.
+    ///
+    /// Together with the button's physical state it answers the one question the
+    /// log could not: whether the `leftMouseUp` that ended a gesture came from a
+    /// finger coming off the button, or from somewhere else. A release follows
+    /// the last movement by a few tens of milliseconds; anything that ends a
+    /// drag on its own leaves a much longer silence behind it.
+    private var lastMovedAt: DispatchTime?
+
+    /// When the button went down, so the drop can say how long the whole gesture
+    /// lasted. A third of a second and four seconds are very different gestures
+    /// and used to look the same.
+    private var pressedAt: DispatchTime?
+
     /// When the zones went up, so that a hide can say how long they lasted.
     ///
     /// A tenth of a second and four seconds are the same line in the log
@@ -406,6 +426,38 @@ final class DragMonitor {
         defer { forgetTheDrag() }
 
         guard isOverlayVisible else { return }
+
+        // Who ended the gesture, and where the event came from.
+        //
+        // **`.hidSystemState` and not `.combinedSessionState`**: the combined
+        // state counts events other processes have posted as though a finger had
+        // done it, so it answers "up" for a synthesised release just as happily
+        // as for a real one — which is the exact distinction this was written to
+        // make, and the first version of this line got it wrong.
+        //
+        // `eventSourceUnixProcessID` is zero for an event that came from the
+        // hardware and is the posting process otherwise, so it names the culprit
+        // outright when there is one.
+        //
+        // It earned its place answering "Zonas cancels my drag after a second":
+        // every release turned out to come from the hardware, ten to sixteen
+        // milliseconds after the last pointer movement — a finger leaving the
+        // trackpad mid-swipe, on a Mac with tap-to-click, drag lock and
+        // three-finger drag all switched off. Nothing was cancelling anything;
+        // the drag was ending because the button was. No line in the log could
+        // have said that before, and the wrong answer was two hours away.
+        //
+        // It sits **after** the guard above on purpose. Before it, every stray
+        // click anywhere on the machine wrote three lines into a log whose whole
+        // discipline is that it records state transitions rather than events.
+        let physicallyDown = CGEventSource.buttonState(.hidSystemState, button: .left)
+        let source = event.getIntegerValueField(.eventSourceUnixProcessID)
+        let poster = NSRunningApplication(processIdentifier: pid_t(source))?.localizedName ?? "unknown"
+        let origin = source == 0 ? "the hardware" : "pid \(source) (\(poster))"
+        Log.write("drop: after \(DragMonitor.elapsed(since: pressedAt)), the button came up"
+                  + " \(DragMonitor.elapsed(since: lastMovedAt)) after the last movement,"
+                  + " from \(origin); the finger is physically "
+                  + (physicallyDown ? "STILL ON THE BUTTON — this release was not the user's" : "off"))
 
         // The same layout that was drawn, not whatever is in the store now.
         //

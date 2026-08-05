@@ -1305,6 +1305,41 @@ carries how long the zones had been up and whether the news came from the mouse
 or from a key, which is what tells the two apart — the original report could not
 be reproduced on demand, and the six drags recorded while trying were all clean.
 
+#### The cancellation that was not one
+
+The report that followed — *"holding shift it starts the selection and after no
+more than a second it cancels and chooses the current zone"* — was not this bug,
+was not any bug, and cost two wrong diagnoses before the log could say so. It is
+written down because the next person will hear it again.
+
+Three lines were added to the drop, and each killed a hypothesis:
+
+- **how long since the last movement.** 10–16 ms. A deliberate release has the
+  pointer stop and *then* the finger lift; ten milliseconds means the finger left
+  while the pointer was still moving.
+- **`eventSourceUnixProcessID`.** Zero — the release came from the hardware. No
+  process was synthesising a mouse-up, which was the leading theory and was
+  wrong. (The field also validates itself: the synthetic drags used for testing
+  report the posting process by name.)
+- **`CGEventSource.buttonState(.hidSystemState)`.** The finger really was off the
+  button. The first version of this check used `.combinedSessionState`, which
+  counts other processes' posted events as though a finger had done it and would
+  have answered "up" either way — a check that cannot fail is not a check.
+
+Together with `Clicking = 0`, `DragLock = 0` and `TrackpadThreeFingerDrag = 0`,
+the answer was that the gesture lasted 300 ms because the trackpad click was
+being physically released mid-swipe, and Zonas was snapping to the zone under the
+cursor exactly as designed. **The fix is a macOS setting, not a line of code.**
+
+The lesson that generalises: for a gesture built out of the mouse and the
+keyboard, "it cancelled" is never a finding. Who ended it, when, and from where
+are three separate questions, and the log answered none of them.
+
+**And then all three lines moved behind the guard**, because before it every
+stray click anywhere on the machine wrote three lines into a file whose whole
+discipline is state transitions rather than events — Rule 9's opposite failure,
+found within minutes of fixing the first one.
+
 ### Stage 5 — The visual editor · 12 days
 
 | Piece | Days |
