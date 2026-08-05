@@ -205,6 +205,13 @@ final class DragMonitor {
         isDragging = false
         isExcluded = false
         gathered = []
+        // Cleared, or "the button came up N ms after the last movement" reports
+        // the gap since the *previous* gesture's last movement for any gesture
+        // that never moved — a number that looks like a measurement, is not one,
+        // and reads as 1.7 s of suspicious stillness where the truth is that
+        // nothing moved at all.
+        lastMovedAt = nil
+        pressedAt = nil
         startPoint = nil
         draggedWindow = nil
         snapshot = nil
@@ -435,9 +442,21 @@ final class DragMonitor {
         // as for a real one — which is the exact distinction this was written to
         // make, and the first version of this line got it wrong.
         //
-        // `eventSourceUnixProcessID` is zero for an event that came from the
-        // hardware and is the posting process otherwise, so it names the culprit
-        // outright when there is one.
+        // `eventSourceUnixProcessID` names the posting process when there is
+        // one — but **zero does not mean "the hardware"**, which is what this
+        // comment used to claim: the window server's own synthesised events
+        // carry zero too. `eventSourceStateID` is the one that separates them,
+        // answering 1 for a real HID event. Both are printed, because a claim
+        // this line cannot support is worse than no line.
+        //
+        // The witness that cannot be faked by any process is the window server's
+        // own log, which records the trackpad's press and release decisions:
+        //
+        //     log show --last 5m --info --debug --predicate \
+        //       'subsystem == "com.apple.Multitouch"'
+        //
+        // A `Button event(mask=0) ... from HostAlgs-Button` with `Touching=0`
+        // beside it is a finger leaving the pad. That is what settled this.
         //
         // It earned its place answering "Zonas cancels my drag after a second":
         // every release turned out to come from the hardware, ten to sixteen
@@ -453,7 +472,10 @@ final class DragMonitor {
         let physicallyDown = CGEventSource.buttonState(.hidSystemState, button: .left)
         let source = event.getIntegerValueField(.eventSourceUnixProcessID)
         let poster = NSRunningApplication(processIdentifier: pid_t(source))?.localizedName ?? "unknown"
-        let origin = source == 0 ? "the hardware" : "pid \(source) (\(poster))"
+        let stateID = event.getIntegerValueField(.eventSourceStateID)
+        let origin = source == 0
+            ? (stateID == 1 ? "the hardware" : "pid 0, source state \(stateID) — NOT the hardware")
+            : "pid \(source) (\(poster))"
         Log.write("drop: after \(DragMonitor.elapsed(since: pressedAt)), the button came up"
                   + " \(DragMonitor.elapsed(since: lastMovedAt)) after the last movement,"
                   + " from \(origin); the finger is physically "
