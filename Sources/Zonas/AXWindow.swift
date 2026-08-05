@@ -11,27 +11,95 @@ import ApplicationServices
 struct AXWindow {
     let element: AXUIElement
 
+    /// How long an application that has stopped answering gets before Zonas
+    /// gives up on it.
+    ///
+    /// This matters because of *where* the lookup below runs: inside the event
+    /// tap's callback, on the main run loop. A callback that takes too long has
+    /// its tap disabled by the system, and `DragMonitor.revive` exists because
+    /// that happens. The default is not a safe number here — measured by sending
+    /// a live application `SIGSTOP` and reading one attribute off one of its
+    /// windows, **a single call takes 1503 ms** before it gives up, and the
+    /// lookup below makes several.
+    ///
+    /// 250 ms is five times the slowest healthy walk ever measured on this
+    /// machine (48 ms, over 378 samples swept across the whole screen; median
+    /// 0.8 ms, p99 4.1 ms), so an app has to be genuinely stuck to reach it.
+    private static let messagingTimeout: Float = 0.25
+
+    /// The system-wide element every lookup starts from, and the only place the
+    /// timeout is set.
+    ///
+    /// It is one shared element rather than a fresh one per drag because
+    /// `AXUIElementSetMessagingTimeout` on the system-wide object is what sets
+    /// the default for **every element this process creates afterwards** — which
+    /// is the only way to cover the elements the walk discovers as it goes,
+    /// since there is nowhere to configure those before they exist. Verified,
+    /// against a stopped process: with the timeout set here and nowhere else, a
+    /// read off an application element and a read off a window element both came
+    /// back at 252 ms instead of 1503.
+    private static let system: AXUIElement = {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, messagingTimeout)
+        return system
+    }()
+
     /// Finds the window sitting under a point on screen (CG coordinates).
     ///
     /// `AXUIElementCopyElementAtPosition` returns the **most specific** element
-    /// under the cursor: a button, a cell, a text field. To reach the window you
-    /// have to walk up the parent chain until you find the one whose role is
-    /// window.
+    /// under the cursor: a button, a cell, a text field. Getting from there to
+    /// the window takes two mechanisms, because neither one covers everything.
     ///
-    /// The hop limit keeps us from hanging on broken hierarchies, and they are
-    /// out there: some apps return cyclic parents.
+    /// **First, ask the element which window it is in.** `kAXWindowAttribute` is
+    /// a single call and it is exact. Measured against the walk below at 912
+    /// points of a covered screen, and against the deepest leaves reachable in
+    /// ten running applications — Chrome, Firefox, Finder, iTerm2, OrbStack,
+    /// Android Studio, Teams, WhatsApp, Claude and the Android emulator — it
+    /// named the same window every single time it answered, at 0.03 ms against
+    /// the walk's 1.24 ms.
+    ///
+    /// **Then walk the parent chain**, because three things answer `nil`: a
+    /// window, which is not inside a window; an element inside a sheet; and a
+    /// toolkit that never implemented the attribute, which is the Android
+    /// emulator's Qt windows here — six leaves, attribute `nil` on all six, walk
+    /// finds the window on all six.
+    ///
+    /// **The walk ends at the application, not at a hop count.** Every chain is
+    /// terminated by an element whose role is `AXApplication`, so reaching one
+    /// means the point was over something with no window above it — a menu bar,
+    /// the desktop. The hop limit is now only a backstop against cyclic parents,
+    /// which are out there.
+    ///
+    /// It used to be the terminator, at 12, and that was not a margin — it was
+    /// losing whole applications. Chromium builds its title bar and its chrome
+    /// out of the same nested DOM as the page, so the chain is as deep at the
+    /// top of the window as anywhere else. Claude Desktop's is **32 hops**, and
+    /// with its window filling the screen the shipped code identified a window
+    /// at **0 of 1995 sampled points**: hold the modifier, drag it anywhere at
+    /// all, and the zones would light up and nothing would ever move. Teams has
+    /// leaves 23 deep by the same measurement, though it could not be raised to
+    /// the front to sweep. Chrome, Firefox, Android Studio and iTerm2 all resolve
+    /// under 10 hops, which is why this survived being used every day.
+    ///
+    /// **A failed read ends the walk.** It used to fall through to the parent,
+    /// which against an app that has stopped answering means paying the timeout
+    /// again at every level.
     static func at(cgPoint point: CGPoint) -> AXWindow? {
-        let system = AXUIElementCreateSystemWide()
         var found: AXUIElement?
         guard AXUIElementCopyElementAtPosition(system,
                                                Float(point.x),
                                                Float(point.y),
                                                &found) == .success,
-              var current = found else { return nil }
+              let leaf = found else { return nil }
 
-        for _ in 0 ..< 12 {
-            if current.role == kAXWindowRole { return AXWindow(element: current) }
-            guard let parent = current.parent else { break }
+        if let window = leaf.containingWindow { return AXWindow(element: window) }
+
+        var current = leaf
+        for _ in 0 ..< 100 {
+            guard let role = current.role else { return nil }
+            if role == kAXWindowRole { return AXWindow(element: current) }
+            if role == kAXApplicationRole { return nil }
+            guard let parent = current.parent else { return nil }
             current = parent
         }
         return nil
@@ -106,11 +174,19 @@ extension AXUIElement {
         attribute(kAXRoleAttribute) as? String
     }
 
-    fileprivate var parent: AXUIElement? {
-        guard let value = attribute(kAXParentAttribute),
+    fileprivate func relative(_ name: String) -> AXUIElement? {
+        guard let value = attribute(name),
               CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         return (value as! AXUIElement)
     }
+
+    fileprivate var parent: AXUIElement? { relative(kAXParentAttribute) }
+
+    /// The window this element is drawn in, straight from the element.
+    ///
+    /// `nil` does not mean "not in a window" — a window itself answers `nil`
+    /// here, and so does everything inside a sheet. It means "ask another way".
+    fileprivate var containingWindow: AXUIElement? { relative(kAXWindowAttribute) }
 
     fileprivate var position: CGPoint? {
         guard let value = attribute(kAXPositionAttribute),
