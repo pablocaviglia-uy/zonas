@@ -192,9 +192,12 @@ the cursor was over. If that keeps happening, `defaults.span: "command"` puts
 the second key under the other thumb.
 
 Everything the cursor crosses while Control is down joins the selection, so
-**let go of Control to start the selection over** — that is the way out of a
-sweep that picked up one zone too many. The highlight always shows the exact
-rectangle the window will get, so what you see is what you are about to have.
+**let go of Control and carry on moving to start the selection over** — that is
+the way out of a sweep that picked up one zone too many. Letting go on its own
+changes nothing, which is what lets you release both keys at the same time, in
+either order, and have the window land on what you gathered. The highlight always
+shows the exact rectangle the window will get, so what you see is what you are
+about to have.
 
 A selection with a hole in it fills the hole: choosing the top-left zone and the
 right-hand column gives you everything between them. Change the key with

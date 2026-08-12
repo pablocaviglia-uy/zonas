@@ -1435,6 +1435,11 @@ selection destroys it. Additive on its own has no way out: overshoot by one zone
 and the only escape is abandoning the drag. Letting go of the key and starting
 again is that way out, and it costs one line.
 
+> **Amended 2026-08-12** — clearing on the release itself was wrong, for the
+> reason written up under "Both keys are let go of at once" below. What clears
+> the selection is now the release *followed by the hand moving on*. Everything
+> in the paragraph above still holds; only the instant it happens moved.
+
 **The key is configurable and therefore can collide.** `defaults.span` defaults
 to `control`; naming the same key as `defaults.modifier` is a schema error with
 both line numbers, because one key cannot mean "show me the zones" and "add this
@@ -1581,6 +1586,67 @@ are three separate questions, and the log answered none of them.
 stray click anywhere on the machine wrote three lines into a file whose whole
 discipline is state transitions rather than events — Rule 9's opposite failure,
 found within minutes of fixing the first one.
+
+#### Both keys are let go of at once
+
+**Reported from the desk, 2026-08-12:** *"to drop the window in the merged zone I
+have to let go of ⌃ first — if I release both together everything gets
+deselected"*. It is the third report in this section phrased as *deselecting*,
+and unlike the second one it was a real defect, in the one line that clears the
+gathering.
+
+Gathering was cleared **on the release of the span key**, which reads as obvious
+and is only correct if the two keys come up one at a time and in the right order.
+Letting go of both together is what "done, put it there" feels like, and it sends
+two `flagsChanged` events a few milliseconds apart in whichever order the
+hardware saw them. With ⌃ first, the selection was already gone by the time ⇧'s
+event arrived to commit it, and the window landed in whatever single zone the
+cursor was over. Same gesture, two outcomes, decided by which finger lifted
+first — and the fastest way to make the gesture work was the one nobody would
+guess, which is to release the keys in a deliberate order.
+
+**The rule is the same asymmetry the modifier already had**, one door further in:
+a key going up is not permission to throw anything away yet. What was gathered is
+kept when the span key comes up, and it is let go of when *the hand moves on* —
+eight points of travel, the same number `dragThreshold` uses to tell a drag from
+a click by somebody not holding still. So the escape hatch from an overshoot
+survives with its cost changed from nothing to a twitch of the wrist, and
+releasing both keys together places the window on the rectangle that was on
+screen, in either order.
+
+Two alternatives lost, and both are worth naming because each looks simpler:
+
+- **Clear when the span key goes *down*** instead of when it comes up. The
+  gathering would then outlive the release indefinitely, so with ⇧ still held the
+  highlight would sit on the old union while the cursor moved somewhere else
+  entirely — §3e's lying preview, arriving through yet another door.
+- **Keep the gathering while the cursor is still inside it**, which needs no
+  distance and no stored point. It makes the escape hatch worse than useless: the
+  cursor after an overshoot is by definition inside the selection you want to
+  abandon, so getting out of it would mean leaving the whole selection and coming
+  back.
+
+A time window — commit what was gathered if the modifier follows within *n*
+milliseconds — was not tried. It is a number keyed to how fast somebody's fingers
+are, and it fails whoever lets go slowly.
+
+**The rule moved into a type of its own**, `Gathering`, and that is not tidying.
+`DragMonitor` is a live tap over every mouse event on the session and cannot be
+unit-tested; the eleven cases in `GatheringTests` — additive sweeps, the tremble,
+the hand moving on, the slop being spent once rather than per event — could not
+otherwise be checked by anything but a person at the machine.
+
+Measured against the real app with posted events, gathering the two left zones
+and then finishing the gesture three ways:
+
+| finish | before | after |
+|---|---|---|
+| ⌃ up, then ⇧ up, nothing moves | `Izquierda Abajo` | `Izquierda Arriba + Izquierda Abajo` |
+| ⇧ up, then ⌃ up | `Izquierda Arriba + Izquierda Abajo` | unchanged |
+| ⌃ up, cursor moves to `Centro`, ⇧ up | `Centro` | unchanged |
+
+Exactly one cell moved, and the two that did not are the ones that would have
+told us the escape hatch or the ordinary order had been traded away for it.
 
 ### Stage 5 — The visual editor · 12 days
 

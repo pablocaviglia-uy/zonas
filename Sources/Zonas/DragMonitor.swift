@@ -75,13 +75,10 @@ final class DragMonitor {
     ///
     /// Empty means the ordinary gesture — whatever is under the cursor right
     /// now, and nothing remembered. It fills up only while the span key is held,
-    /// and **releasing that key empties it again**, which is the whole way out of
-    /// a selection you did not mean: overshoot by one zone, let go, start over.
-    /// Without it the only escape from a wrong selection would be to abandon the
-    /// drag, because gathering is additive and passing back over a zone a second
-    /// time does not remove it. Additive is what makes a sweep predictable; the
-    /// escape hatch is what makes additive survivable.
-    private var gathered: Set<Int> = []
+    /// and the rule for when it empties again is `Gathering`'s, which is a type
+    /// of its own because that rule is the one part of this gesture that can be
+    /// tested without posting events at the real machine.
+    private var gathering = Gathering()
 
     /// Whether somebody asked for the tap to be quiet — see `setEnabled`.
     ///
@@ -246,7 +243,7 @@ final class DragMonitor {
         isOverlayVisible = false
         isDragging = false
         isExcluded = false
-        gathered = []
+        gathering.forget()
         selected = []
         selectionArea = nil
         // Cleared, or "the button came up N ms after the last movement" reports
@@ -515,13 +512,11 @@ final class DragMonitor {
                            on screen: NSScreen,
                            flags: CGEventFlags) -> Set<Int> {
         let under = layout.zoneIndex(under: point, in: screen.cgVisibleFrame)
+        // A layout with no span key gathers nothing, which `Gathering` reads as
+        // the key never being held: every answer is the zone under the cursor.
+        let spanHeld = layout.span.map { flags.contains($0.flags) } ?? false
 
-        guard let span = layout.span, flags.contains(span.flags) else {
-            gathered = []
-            return under.map { [$0] } ?? []
-        }
-        if let under { gathered.insert(under) }
-        return gathered
+        return gathering.selection(under: under, at: point, spanHeld: spanHeld)
     }
 
     private func describe(_ p: CGPoint) -> String {
