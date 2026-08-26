@@ -70,11 +70,13 @@ universal binary with `-u`.
 | `EditorController.swift` | The editor: windows, gestures, drawing, and when it must not write. |
 | `EditorDocument.swift` | What the editor edits — `rid` identity, split, move, delete, undo. Nothing about screens. |
 | `Fraction.swift` | The denominators the file can write, which are the ones the editor snaps to. |
+| `Switcher.swift` | Which screen the ⌘Tab switcher opens on: the pin, when a correction is owed, and the path the pointer walks to move the Dock. No system calls, which is what makes it testable. |
+| `DockDisplay.swift` | Reading the Dock's screen out of its own window, and the synthetic walk that moves it. The switcher follows the Dock — §7's write-up says how long that took to establish. |
 | `LaunchAtLogin.swift` | `SMAppService` registration. |
 | `Signature.swift` | Logs the live process's cdhash and designated requirement. |
 | `Log.swift` | File log at `~/Library/Logs/Zonas.log`. |
 | `AppDelegate.swift` | Menu bar, permissions, wiring. |
-| `Tests/ZonasTests/` | 233 tests. `swift test`, and CI runs it on every push. |
+| `Tests/ZonasTests/` | 275 tests. `swift test`, and CI runs it on every push. |
 
 ### The release pipeline, corrected
 
@@ -1648,6 +1650,123 @@ and then finishing the gesture three ways:
 Exactly one cell moved, and the two that did not are the ones that would have
 told us the escape hatch or the ordinary order had been traded away for it.
 
+### Not in any stage — which screen the ⌘Tab switcher opens on
+
+**Added 2026-08-26, asked for by name.** The complaint was that the application
+switcher "sometimes gets misconfigured" and shows up on the laptop instead of
+the big monitor. It is on no list in this document either, and it is here for
+the same reason the span key is: so the next person does not wonder which stage
+it belongs to. The answer is none.
+
+**The switcher opens on the screen the Dock is on.** Not the main display, not
+the display with the frontmost window, not the display the pointer is on. The
+switcher is a window owned by the Dock process — `CGWindowListCopyWindowInfo`
+shows it at layer 20, covering exactly one screen — and it is drawn where that
+process currently lives. That also explains the drift nobody could account for:
+the Dock moves to whichever screen you last pushed the pointer to the bottom
+edge of, and reaching for something on the laptop does it without meaning to.
+
+**The afternoon went into a signal that was not the mechanism**, and that is
+the part worth keeping. SkyLight exports
+`SLSCopyActiveMenuBarDisplayIdentifier`, it reads reliably in 25 µs, it changes
+exactly when you would expect, and the first two measurements of the switcher
+agreed with it. It is not what decides. The run that separates them, with the
+Dock and the menu bar moved independently:
+
+```
+                                 dock       activeBar   switcher
+start                            ULTRA      ULTRA       ULTRA
+after push Dock->ULTRA           ULTRA      ULTRA       ULTRA
+after click BUILTIN menu bar     ULTRA      BUILTIN     ULTRA     ← disagree
+after push Dock->BUILTIN         BUILTIN    BUILTIN     BUILTIN
+after click ULTRA menu bar       BUILTIN    ULTRA       BUILTIN   ← disagree
+after push Dock->ULTRA           ULTRA      ULTRA       ULTRA
+```
+
+Six for six on the Dock, four for six on the menu bar. Two agreeing samples had
+been enough to build a whole file on, and the file had to be thrown away. §10
+gained its eleventh rule from it.
+
+**Every API that looks like the answer is a liar.** In the order they were
+tried:
+
+| Call | What it does |
+|---|---|
+| `SLSSetActiveMenuBarDisplayIdentifier` | Returns `0`. Changes nothing — three argument spellings, read back from a fresh connection. |
+| `SLSSetDockRectWithReason` | Is accepted, and the rect *does* read back changed. The Dock does not move: it edits the WindowServer's cached copy of where the Dock is, not the Dock. |
+| `CGWarpMouseCursorPosition` to the edge | Nothing. |
+| `NSRunningApplication.activate` on an app on that screen | Nothing. |
+| A real key window of our own on that screen — `canBecomeKey`, `isKeyWindow == true` | Nothing. |
+
+What works is what a person does: **push the pointer against the bottom edge of
+the screen you want it on.** Synthesised, that is a run of real `.mouseMoved`
+events walking into the edge, and it has to be a *walk*. Arriving is not
+enough — events posted at the edge with no approach moved it 0 times out of 5,
+and a 40-point approach in 8-point steps moved it 12 out of 12.
+
+**Reading it needs no private API at all**, which is the one place this came out
+ahead. The Dock's own window carries the answer and carries it while the Dock is
+hidden, parked off the bottom of the screen it belongs to.
+`CGWindowListCreateDescriptionFromArray` on one known window id costs 261 µs
+against 3.7 ms for a full `.optionAll` scan, and the description carries the
+owner and the title, so a stale id is caught rather than believed.
+
+**The correction fires on ⌘ going down, and the reason is that it is the only
+moment that is free.** Watching the Dock and putting it back whenever it drifts
+means firing the instant somebody has deliberately pushed their own cursor to
+the bottom of the screen they are working on — fighting them over the thing they
+just did. And a Dock on the wrong screen costs nothing until the switcher is
+opened. ⌘ is the last moment before that and the first moment anybody cares; the
+check that finds nothing owed, which is almost every ⌘, is one description of
+one window.
+
+**The two things that were wrong when it was first tried on the real app**, both
+found by running it and neither by testing it:
+
+1. **A menu that is closing still owns the mouse.** The menu item recorded the
+   pin and then walked the pointer, and the walk went into the tracking session
+   and out the other side. The Dock never heard it, the log said so, and from
+   outside the menu item simply did not work. It hangs off `menuDidClose` plus a
+   tenth of a second now.
+2. **The 6 ms between the events was superstition, and an expensive one.**
+   Posting them back to back works 12 times out of 12 and puts the pointer back
+   in 1.5 ms, against 37 ms spaced out. That matters because the switcher, once
+   open, swallows the walk the same way a menu does — and 37 ms is inside the
+   window where a fast ⌘Tab opens the switcher on top of the correction meant
+   for it. Measured after the change: Tab pressed **5 ms** after ⌘, faster than a
+   hand can do it, and the switcher still opens on the pinned screen.
+
+**The bug that every test passed.** The Dock's window was found by
+`kCGWindowName == "Dock"`, which reads perfectly from a binary launched in a
+terminal and identifies nothing at all in the shipped app: **macOS redacts
+window titles from any process without the Screen Recording permission**, which
+this app does not have and §5 says it will not ask for. Measured on the same
+machine minutes apart — from the shell, 336 of 337 windows carry a name and the
+Dock's is `Dock`; from a Developer-ID-signed `.app` launched with `open`, 12 of
+331 carry a name and the Dock's window has none. `kCGWindowOwnerPID`,
+`kCGWindowLayer` and the bounds all survive; only the title is stripped.
+Accessibility does not restore it: a probe bundle whose designated requirement
+was byte-identical to Zonas' got `AXIsProcessTrusted() == true` and still saw no
+titles.
+
+Left that way the feature would have been inert for every user in the world, the
+menu would have offered nothing but "Cannot tell where the Dock is", and every
+test written for it would still have passed — because all of them ran from a
+terminal that holds the permission. It is found by owning process and
+`CGWindowLevelForKey(.dockWindow)` now, which is also immune to the second half
+of the same problem: `kCGWindowOwnerName` is the *localized* application name,
+so `== "Dock"` is a feature that works in English and stops working in Chinese.
+§10 gained its twelfth rule from this one.
+
+**What it cannot do, said before somebody discovers it:** a Dock set to the left
+or the right of the screen cannot be moved between screens by synthetic events
+at all. Nine attempts — its own edge at three heights including the stretch with
+no neighbouring display beyond it, the other three edges, and the edge again
+with deltas up to −60 over a hundred events. A person can do it with a real
+mouse. The reason was not found. So the feature recognises the case, says so in
+the menu, and refuses; the alternative is a pointer dragged across the desk for
+nothing on every ⌘.
+
 ### Stage 5 — The visual editor · 12 days
 
 | Piece | Days |
@@ -1829,3 +1948,20 @@ that your app is about to stop working.
     and `viewDidDisappear` all fire for reasons that have nothing to do with
     intent, and anything gated on "the user is finished" has to hang off the
     gesture that finished it.
+
+11. **A signal that moves with the thing you want is not the mechanism.** Two
+    agreeing samples are not evidence; the case where they disagree is. The
+    ⌘Tab switcher and macOS's "active menu bar display" agreed the first two
+    times they were measured, a whole file was written on it, and the switcher
+    follows the Dock. Move each candidate independently and find the row where
+    they come apart, or you are reading a coincidence. §7's write-up has the
+    table.
+
+12. **Verifying from the terminal is not verifying the app.** TCC attributes
+    permissions to the *responsible* process, so anything launched from a shell
+    that holds Accessibility and Screen Recording inherits both — and the app,
+    launched from the Finder, holds neither unless it was granted them. That gap
+    hid a `kCGWindowName` comparison that worked in every test and identified
+    nothing in the shipped bundle. When a feature reads anything the system
+    guards — window titles above all — the last measurement has to come from a
+    signed `.app` launched with `open`, not from `.build/debug`.

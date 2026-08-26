@@ -101,6 +101,21 @@ final class DragMonitor {
 
     private let overlay = OverlayController()
 
+    /// Called when ⌘ goes down outside a gesture.
+    ///
+    /// It has nothing to do with dragging windows, and it is here anyway,
+    /// because this tap is already listening to `.flagsChanged` for the gesture
+    /// and a second permanent tap on every modifier on the machine — for a menu
+    /// bar app asking for the Accessibility permission — is not a thing to add
+    /// for a convenience. What it is *for* lives in `AppDelegate`, which is
+    /// where the app's decisions live; this file only knows when to ask.
+    ///
+    /// Two consequences worth knowing rather than discovering: it is silent
+    /// while the editor is open, because the editor suspends this tap, and it
+    /// never fires at all without the Accessibility permission, because without
+    /// it there is no tap.
+    var onCommand: (() -> Void)?
+
     // MARK: - Lifecycle
 
     @discardableResult
@@ -318,6 +333,16 @@ final class DragMonitor {
     /// The tap runs on the main run loop, so this is already on the UI thread
     /// and can touch the overlay without dispatching.
     private func handle(type: CGEventType, event: CGEvent) {
+        // Zonas walks the pointer into the edge of a screen to move the ⌘Tab
+        // switcher, and that walk comes straight back in through this tap: forty
+        // points of movement the user did not make, followed by a warp back.
+        // The permanent tap does not listen to `.mouseMoved` and the gesture tap
+        // that does is only alive while a drag is, which this refuses to run
+        // during — so the two should never meet. "Should never" is the kind of
+        // claim that stops being true when somebody adds an event type, and the
+        // cost of not relying on it is one comparison.
+        if event.getIntegerValueField(.eventSourceUserData) == DockDisplay.ourOwnGesture { return }
+
         switch type {
         case .leftMouseDown:
             // Deliberately not logged. A line here is a line for every click
@@ -358,7 +383,27 @@ final class DragMonitor {
         // ways of changing the same answer, and only one of them used to be
         // heard.
         case .flagsChanged:
-            if isDragging || isOverlayVisible { handleDrag(event) }
+            if isDragging || isOverlayVisible {
+                handleDrag(event)
+            } else if event.flags.contains(.maskCommand), !isButtonDown {
+                // ⌘ is down and nothing else is going on, which is as close to
+                // "the switcher is about to open" as this app can get without
+                // reading key codes. `onCommand` decides whether anything is
+                // owed; almost every time the answer is no and it costs one
+                // 261 µs question about one window.
+                //
+                // Not gated on ⌘Tab specifically, and that is the trade: waiting
+                // for Tab would mean reading key codes off a tap this app has
+                // promised only reads modifiers, and it would mean swallowing
+                // ⌘Tab and re-posting it to buy the ~65 ms the Dock takes to
+                // move. Breaking ⌘Tab is not a bug this app is allowed to have.
+                //
+                // The button check is not belt and braces. A ⌘-drag starts with
+                // exactly this event, and dragging somebody's pointer to the
+                // bottom of another screen while they are holding a window
+                // would be the worst thing in this file.
+                onCommand?()
+            }
 
         // From the session tap, and only ever while a gesture is live. Once the
         // button is up this is the only thing that says where the cursor went.

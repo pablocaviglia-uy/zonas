@@ -214,10 +214,32 @@ is missing — has:
 | `Edit the File…` | Opens `zonas.json5` in your default editor |
 | `Reload Zones` (⌘R) | Re-reads the file after you edit it |
 | `Open Log…` | Opens `~/Library/Logs/Zonas.log` |
+| `App Switcher Screen` | Which screen ⌘Tab opens on — see below |
 | `Launch at Login` | Only available from `/Applications` |
 | `Accessibility Permissions…` | Prompts and opens the Settings pane |
 | `Welcome to Zonas…` | The first-launch window again, whenever you want it |
 | `Quit Zonas` (⌘Q) | |
+
+### Which screen ⌘Tab opens on
+
+macOS gives you no say in this, and the answer surprises people: **the
+application switcher opens on whichever screen the Dock is on.** The Dock moves
+to whatever screen you last pushed the pointer to the bottom edge of, so
+reaching for something on the laptop is enough to take the switcher with it, and
+it stays there.
+
+`App Switcher Screen` lists your screens, says which one has it right now, and
+pins it to the one you pick — the Dock moves there as soon as you choose. After
+that, if anything moves it away, Zonas puts it back the next time you press ⌘,
+which is about a tenth of a second before you have finished pressing ⌘Tab. It
+does that by walking the pointer into that screen's bottom edge, because that is
+the only thing macOS accepts; the pointer is away for about a millisecond and a
+half.
+
+Two things worth knowing. It needs the Dock at the **bottom** of the screen: a
+Dock on the left or the right cannot be moved between screens this way at all,
+and the menu says so instead of pretending. And `Wherever the Dock Is` is the
+way back to plain macOS behaviour — it is what you have until you pick a screen.
 
 There is no permission prompt at launch, on purpose: when the app starts by
 itself at login, a modal system dialog either steals focus or ends up buried

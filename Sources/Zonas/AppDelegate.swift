@@ -7,6 +7,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var launchAtLoginItem: NSMenuItem?
     private var modifierHintItem: NSMenuItem?
     private var problemItem: NSMenuItem?
+    private var switcherMenu: NSMenu?
+
+    /// Until when to stop trying to put the ⌘Tab switcher back.
+    ///
+    /// Without it, a pin that cannot be honoured is retried on every ⌘ on the
+    /// machine — thousands of times a day, each one a line in the log saying the
+    /// same thing, and each failing one a pointer dragged across the desk for
+    /// nothing. `.distantFuture` is the pinned monitor being unplugged, which
+    /// only a change to the screens can undo and which is exactly what clears
+    /// this.
+    private var switcherQuietUntil: Date?
+
+    /// Whether a move is in flight. It runs off the main thread, so ⌘ can come
+    /// down again in the middle of one.
+    private var switcherMoving = false
     private var permissionWatchdog: Timer?
     private var layoutWatcher: LayoutWatcher?
     private let monitor = DragMonitor()
@@ -30,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         buildMenu()
         wireTheEditor()
         wireTheWelcome()
+        wireTheSwitcher()
         startMonitor()
         startWatchingTheLayout()
 
@@ -102,6 +118,245 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
     }
 
+    // MARK: - The ⌘Tab switcher's screen
+
+    /// Wires the pin to the one moment it is worth honouring.
+    ///
+    /// **The correction happens when ⌘ goes down, and that is the whole
+    /// design.** The obvious alternative is to watch where the Dock is and put
+    /// it back the moment it drifts, and it is wrong twice. Moving it means
+    /// dragging the pointer to the bottom of another screen, so "the moment it
+    /// drifts" means doing that the instant somebody has deliberately pushed
+    /// their cursor to the bottom of the screen they are working on — fighting
+    /// them, over the thing they just did. And a Dock on the wrong screen costs
+    /// nothing at all until the switcher is opened.
+    ///
+    /// ⌘ going down is the last moment before that and the first moment anybody
+    /// cares. The check that finds nothing owed — which is almost every ⌘ — is
+    /// one description of one window.
+    ///
+    /// It is also why nothing here runs on a timer or waits for the displays to
+    /// settle after a wake. Reconfiguration is one of the two ways this drifts,
+    /// and the answer is not to race it: the next ⌘ finds the Dock on the wrong
+    /// screen and moves it, well before anybody has finished pressing ⌘Tab.
+    private func wireTheSwitcher() {
+        monitor.onCommand = { [weak self] in self?.keepTheSwitcherPut() }
+
+        // The one thing a change of screens does: let it be tried again. A pin
+        // to a monitor that is not plugged in gives up permanently, and this is
+        // the only event that can make it plugged in.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                self?.switcherQuietUntil = nil
+            }
+    }
+
+    /// How many attempts in a row have failed, which is what sets how long to
+    /// wait before the next one.
+    ///
+    /// The wait doubles from one second to thirty, because the two things that
+    /// make this fail want opposite answers. A menu or the switcher itself being
+    /// open swallows the walk, and that is over by the next keystroke — waiting
+    /// half a minute on it would leave the switcher on the wrong screen for the
+    /// rest of the minute somebody is actually using it. A Dock that will not
+    /// move at all is not going to move on the next keystroke either, and
+    /// retrying it forever writes the same line into the log all day.
+    private var switcherFailures = 0
+
+    private var switcherBackOff: TimeInterval {
+        min(30, pow(2, Double(max(switcherFailures - 1, 0))))
+    }
+
+    private func keepTheSwitcherPut() {
+        // Posting the walk is quick, but waiting for the Dock is up to a second,
+        // and it all runs off the main thread — so ⌘ can perfectly well come
+        // down again while one is in flight. A second gesture layered on the
+        // first would walk the pointer twice.
+        guard !switcherMoving else { return }
+        guard let pinned = Switcher.pinned() else { return }
+        guard let current = DockDisplay.current.flatMap(DockDisplay.uuid(of:)) else { return }
+        guard Switcher.shouldCorrect(pinned: pinned, current: current) else { return }
+        if let quietUntil = switcherQuietUntil, Date() < quietUntil { return }
+
+        // Asked here as well as inside `move`, because this is the path that
+        // runs on every ⌘: without it the refusal is a log line every thirty
+        // seconds for as long as the pin stands. Somebody who moves their Dock
+        // back to the bottom picks the screen again from the menu, which clears
+        // this — the same way an unplugged monitor does.
+        guard Switcher.Edge.current == .bottom else {
+            Log.write("switcher: the Dock is on the \(Switcher.Edge.current.rawValue), "
+                      + "which cannot be moved between screens — the pin is on hold")
+            switcherQuietUntil = .distantFuture
+            return
+        }
+
+        guard let screen = DockDisplay.screen(pinned) else {
+            // Rule 9's shape: from outside, a pin to a monitor that is at the
+            // office and a pin that silently does nothing look identical.
+            Log.write("switcher: pinned to a screen that is not connected — "
+                      + "leaving it alone until the screens change")
+            switcherQuietUntil = .distantFuture
+            return
+        }
+
+        switcherMoving = true
+        DockDisplay.move(to: screen) { [weak self] landed in
+            guard let self else { return }
+            self.switcherMoving = false
+            if landed {
+                self.switcherFailures = 0
+            } else {
+                self.switcherFailures += 1
+                self.switcherQuietUntil = Date().addingTimeInterval(self.switcherBackOff)
+            }
+        }
+    }
+
+    /// The submenu, rebuilt from scratch every time it is about to be seen.
+    ///
+    /// Not patched in place: the items *are* the monitors plugged in at this
+    /// instant, and `NSScreen` instances do not survive a reconfiguration —
+    /// `Coords` says why — so there is nothing worth keeping between openings.
+    private func rebuildSwitcherMenu() {
+        guard let menu = switcherMenu else { return }
+        menu.removeAllItems()
+
+        let names = screenNames()
+        guard let current = DockDisplay.current.flatMap(DockDisplay.uuid(of:)) else {
+            // No choices at all rather than choices that would not work. The pin
+            // is honoured by reading the Dock's screen back, so without it every
+            // item in this menu would be a switch wired to nothing.
+            let explanation = NSMenuItem(title: "Cannot tell where the Dock is",
+                                         action: nil, keyEquivalent: "")
+            explanation.isEnabled = false
+            menu.addItem(explanation)
+            return
+        }
+
+        // Where it is right now, in the same voice as the modifier reminder at
+        // the top of the main menu: a line you read, not a thing you click. It
+        // is also the only way to tell an unpinned switcher that happens to be
+        // in the right place from a pinned one.
+        let now = NSMenuItem(title: "Now on \(names[current] ?? "an unknown screen")",
+                             action: nil, keyEquivalent: "")
+        now.isEnabled = false
+        menu.addItem(now)
+
+        // Said here rather than left as a menu that quietly does nothing. The
+        // switcher follows the Dock, and a Dock at the side of the screen cannot
+        // be moved between screens at all — `Switcher.Edge` has the nine
+        // attempts.
+        guard Switcher.Edge.current == .bottom else {
+            let why = NSMenuItem(title: "Needs the Dock at the bottom of the screen",
+                                 action: nil, keyEquivalent: "")
+            why.isEnabled = false
+            menu.addItem(why)
+            return
+        }
+        menu.addItem(.separator())
+
+        let pinned = Switcher.pinned()
+        let anywhere = ownItem("Wherever the Dock Is", #selector(pinSwitcher))
+        anywhere.state = pinned == nil ? .on : .off
+        menu.addItem(anywhere)
+
+        for screen in NSScreen.screens {
+            guard let uuid = DockDisplay.uuid(of: screen) else { continue }
+            let item = ownItem(names[uuid] ?? screen.localizedName, #selector(pinSwitcher))
+            item.representedObject = uuid
+            item.state = pinned == uuid ? .on : .off
+            menu.addItem(item)
+        }
+    }
+
+    /// A name per display UUID, made unambiguous.
+    ///
+    /// `localizedName` is the model, so the second identical monitor on a desk
+    /// is a menu with the same word in it twice and no way to tell which is
+    /// which. The size is what `zonas monitors` prints, for the same reason.
+    private func screenNames() -> [String: String] {
+        let screens = NSScreen.screens
+        var counts: [String: Int] = [:]
+        for screen in screens { counts[screen.localizedName, default: 0] += 1 }
+
+        var names: [String: String] = [:]
+        for screen in screens {
+            guard let uuid = DockDisplay.uuid(of: screen) else { continue }
+            let name = screen.localizedName
+            names[uuid] = counts[name, default: 0] > 1
+                ? "\(name) (\(Int(screen.frame.width))×\(Int(screen.frame.height)))"
+                : name
+        }
+        return names
+    }
+
+    /// Picking a screen pins it **and moves the switcher there now**.
+    ///
+    /// Moving it immediately is the point of the menu item. Somebody opens this
+    /// because the switcher is on the wrong screen right now; a setting that
+    /// only took effect at the next ⌘ would read as a menu item that did
+    /// nothing, since the next ⌘ is usually the ⌘ of the ⌘Tab they were
+    /// reaching for.
+    @objc private func pinSwitcher(_ sender: NSMenuItem) {
+        let uuid = sender.representedObject as? String
+        Switcher.pin(uuid)
+        switcherQuietUntil = nil
+        switcherFailures = 0
+
+        guard let uuid else {
+            Log.write("switcher: unpinned — back to wherever the Dock is")
+            return
+        }
+        guard let screen = DockDisplay.screen(uuid) else { return }
+        Log.write("switcher: pinned to \(screen.localizedName)")
+
+        // **Not moved here.** A menu action runs while the menu is still being
+        // taken down, and a menu that is coming down still owns the mouse: the
+        // pointer walk this posts goes into the tracking session and out the
+        // other side, and the Dock never hears about it. Measured, and it fails
+        // silently — the pin is recorded, the log says the Dock stayed put, and
+        // from the outside the menu item simply did not work.
+        switcherPending = uuid
+    }
+
+    /// What the menu asked for, waiting for the menu to be gone.
+    ///
+    /// The UUID and not the `NSScreen`. It is only held for a tenth of a second,
+    /// but `NSScreen` instances are replaced wholesale on any reconfiguration —
+    /// `Coords` says why — and a monitor going to sleep inside that tenth of a
+    /// second would leave a dead object to read a frame off.
+    private var switcherPending: String?
+
+    /// How long after the menu closes to move the Dock.
+    ///
+    /// `menuDidClose` is sent while the tracking session is still unwinding, so
+    /// it is the right moment to *know* and the wrong moment to act. A tenth of
+    /// a second was the shortest delay that worked every time.
+    private static let afterTheMenu: TimeInterval = 0.1
+
+    func menuDidClose(_ menu: NSMenu) {
+        // Cleared whatever happens next. Left set, a request that could not be
+        // served now is served by the *next* time the menu is closed, which
+        // could be minutes later and about something else entirely.
+        let pending = switcherPending
+        switcherPending = nil
+
+        guard let pending else { return }
+        guard !switcherMoving, let screen = DockDisplay.screen(pending) else {
+            // Rule 9. The pin itself is already written, so the next ⌘ serves
+            // it — but "I picked a screen and nothing happened" needs a line
+            // saying which of the two reasons it was.
+            Log.write(switcherMoving
+                      ? "switcher: a move was already under way — the pin stands, the next ⌘ serves it"
+                      : "switcher: the screen just picked is no longer connected")
+            return
+        }
+        switcherMoving = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.afterTheMenu) { [weak self] in
+            DockDisplay.move(to: screen) { [weak self] _ in self?.switcherMoving = false }
+        }
+    }
     func applicationWillTerminate(_ notification: Notification) {
         monitor.stop()
         layoutWatcher?.stop()
@@ -270,6 +525,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(ownItem("Open Log…", #selector(openLog)))
         menu.addItem(.separator())
 
+        // A submenu and not a row of items, because the list is however many
+        // monitors are plugged in and it changes while the app is running.
+        let switcher = NSMenuItem(title: "App Switcher Screen", action: nil, keyEquivalent: "")
+        let switcherChoices = NSMenu()
+        switcher.submenu = switcherChoices
+        switcherMenu = switcherChoices
+        menu.addItem(switcher)
+
         let launchItem = ownItem("Launch at Login", #selector(toggleLaunchAtLogin))
         launchItem.state = LaunchAtLogin.isEnabled ? .on : .off
         launchAtLoginItem = launchItem
@@ -360,6 +623,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // the reminder is re-read rather than baked in when the menu was built.
         modifierHintItem?.title = modifierHint
         showProblem(LayoutStore.shared.problem)
+        // The submenu has no delegate of its own on purpose: this fires before
+        // the main menu is drawn, which is well before anybody has moved the
+        // pointer down to open it.
+        rebuildSwitcherMenu()
     }
 
     /// Puts what is wrong with the file where somebody will see it.
