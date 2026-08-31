@@ -71,6 +71,13 @@ enum LayoutFile {
         // instead of chosen: the window is given all of them at once. Let go of
         // it to start the selection again.
         span: "control",
+        // Drag a window against the top edge of the screen and Zonas offers
+        // the whole screen instead of a zone. This is how far into the screen
+        // that band reaches, in points — the menu bar above it counts too,
+        // because that is where the pointer ends up when you throw a window at
+        // the top. 0 turns it off, and holding the span key turns it off for
+        // as long as you hold it, which is how you reach the zones under it.
+        maximise: 24,
         gap: 8,  // points of air between two windows
         margin: 0,  // points between a window and the edge of the screen
       },

@@ -17,7 +17,7 @@ final class OverlayController {
 
     /// What is on screen right now, so that an event that changes nothing does
     /// nothing. See `show(_:selecting:on:)`.
-    private var shown: (layout: Layout, selection: Set<Int>)?
+    private var shown: (layout: Layout, selection: Selection)?
 
     /// Shows the zones of one layout and highlights the selection.
     ///
@@ -37,9 +37,10 @@ final class OverlayController {
     ///
     /// - Parameters:
     ///   - layout: the layout this drag is working against.
-    ///   - selection: indices into `layout.zones`; empty highlights nothing.
+    ///   - selection: what the drop would use — zones out of the file, or the
+    ///     whole screen. `.zones([])` highlights nothing.
     ///   - screen: the screen the drag is happening on.
-    func show(_ layout: Layout, selecting selection: Set<Int>, on screen: NSScreen) {
+    func show(_ layout: Layout, selecting selection: Selection, on screen: NSScreen) {
         guard let display = screen.displayID else {
             // Documented as always present. If it ever is not, saying so beats
             // drawing on a screen we cannot tell apart from another one.
@@ -76,14 +77,25 @@ final class OverlayController {
         // union below. Selection is by **index**: two zones with the same
         // geometry are a thing people write in a config file, and comparing
         // rectangles would light up both of them.
-        var boxes = layout.viewFrames(in: area).enumerated()
-            .filter { !selection.contains($0.offset) }
-            .map { index, rect in
-                ZoneOverlayView.Box(rect: rect, name: layout.zones[index].name, isActive: false)
-            }
+        //
+        // **The layout is not drawn at all when the whole screen is the
+        // target.** Leaving the zones underneath would put every outline and
+        // every name behind a translucent box the size of the screen, and the
+        // one thing this preview has to say at that moment is that the layout is
+        // not what is about to happen. It is the same rule as the union's, one
+        // step further: there is one rectangle, and it is the one the window
+        // gets.
+        var boxes: [ZoneOverlayView.Box] = []
+        if selection != .maximised {
+            boxes = layout.viewFrames(in: area).enumerated()
+                .filter { !selection.gathered.contains($0.offset) }
+                .map { index, rect in
+                    ZoneOverlayView.Box(rect: rect, name: layout.zones[index].name, isActive: false)
+                }
+        }
 
         // Last, so it is drawn over the zones it covers.
-        if let target = layout.union(of: selection) {
+        if let target = layout.target(of: selection) {
             boxes.append(ZoneOverlayView.Box(
                 rect: Coords.cgToView(layout.frame(of: target, in: area), filling: area),
                 name: target.name,

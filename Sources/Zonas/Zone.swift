@@ -145,6 +145,22 @@ struct Layout: Equatable {
     /// their file is broken by a default they never typed.
     var span: Modifier? = .control
 
+    /// How far into the screen the band along the top edge reaches, in points.
+    /// Zero turns it off.
+    ///
+    /// The depth is the file's business; the target is not. Every other
+    /// rectangle a window can be given is a zone somebody wrote down, and this
+    /// one appears in layouts written before it existed — drag a window up
+    /// against the top of the screen and what is offered is the whole usable
+    /// area.
+    ///
+    /// **Points and not a fraction**, unlike everything else about a zone. What
+    /// the number has to be big enough for is a hand throwing a window at the
+    /// top of the screen, and a hand is the same size on the laptop and on the
+    /// ultrawide — the one measurement in this file that is about the person
+    /// rather than about the screen.
+    var maximise: CGFloat = Layout.defaultMaximise
+
     /// Bundle identifiers of applications Zonas keeps its hands off.
     ///
     /// A `Set` and not an array, because the only question ever asked of it is
@@ -157,6 +173,12 @@ struct Layout: Equatable {
 
     static let defaultGap: CGFloat = 8
     static let defaultMargin: CGFloat = 0
+
+    /// Roughly the height of the menu bar, and about half a title bar. It is
+    /// deep enough to hit without aiming and shallow enough that a top row of
+    /// zones does not notice: on the laptop it is 2.7% of the usable height,
+    /// on the ultrawide 1.7%.
+    static let defaultMaximise: CGFloat = 24
 
     /// The rectangle a window dropped in this zone is given.
     ///
@@ -289,6 +311,64 @@ struct Layout: Equatable {
                     height: maxY - minY)
     }
 
+    /// The whole usable area, as a zone that is in nobody's file.
+    ///
+    /// Being a `Zone` is the entire cost of maximising, the same trick `union`
+    /// plays from the other direction: `frame(of:in:)` gives it the margin on
+    /// all four sides because it touches all four edges, the overlay draws it,
+    /// the drop sets it, and Stage 4's clamp keeps it on the screen — none of
+    /// which needed a line for it.
+    ///
+    /// **The name is what the overlay writes across the screen**, and it is not
+    /// "Full Screen" on purpose. On a Mac that means the green button: a
+    /// separate Space, a hidden menu bar and a window no tiler can then move.
+    /// Promising it in fifteen-point type and doing something else would be the
+    /// preview lying about the drop, which is §3e with words instead of
+    /// rectangles.
+    static let maximised = Zone(name: "Maximised", x: 0, y: 0, width: 1, height: 1)
+
+    /// The strip along the top of the screen where a drop maximises instead of
+    /// filling a zone, or `nil` when the file has turned it off.
+    ///
+    /// **It reaches above the usable area, over the menu bar**, and that is not
+    /// generosity — it is where the pointer actually ends up. macOS stops the
+    /// window when its title bar reaches the menu bar but it does not stop the
+    /// pointer, so somebody throwing a window at the top of the screen finishes
+    /// with the cursor in a strip no zone can ever cover. Those points are free:
+    /// nothing else in the app can be aimed at from there.
+    ///
+    /// It spans the whole width of the **screen** rather than of the usable
+    /// area, so a Dock on the left does not carve a dead corner out of the top
+    /// edge. `min` is what makes the arithmetic safe rather than a guard: the
+    /// usable area is inside the screen, so the top of the band is at or above
+    /// the top of the area and the height cannot come out negative.
+    ///
+    /// This is a **hit region**, like `Zone.rect` and unlike `Zone.frame`. What
+    /// the window is given is `frame(of: Layout.maximised, in:)`, which is the
+    /// usable area and has nothing to do with this rectangle.
+    func maximiseBand(of screen: CGRect, usable area: CGRect) -> CGRect? {
+        guard maximise > 0 else { return nil }
+        // CG coordinates: the top of the screen is the *smallest* y.
+        let top = min(screen.minY, area.minY)
+        return CGRect(x: screen.minX,
+                      y: top,
+                      width: screen.width,
+                      height: area.minY + maximise - top)
+    }
+
+    /// The rectangle a selection resolves to, or `nil` when nothing is chosen.
+    ///
+    /// Both callers that matter come through here — the overlay draws this and
+    /// the drop applies it — for the same reason `frame(of:in:)` exists. A
+    /// second answer to "what is about to happen" is a second chance for the
+    /// preview to lie.
+    func target(of selection: Selection) -> Zone? {
+        switch selection {
+        case .maximised: return Layout.maximised
+        case .zones(let indices): return union(of: indices)
+        }
+    }
+
     /// Whether this application is one the file says to leave alone.
     ///
     /// **Matching is exact**, on the bundle identifier and nothing else. An
@@ -311,3 +391,35 @@ struct Layout: Equatable {
     }
 }
 
+/// What a drag has chosen, and therefore what the overlay draws and what the
+/// drop applies.
+///
+/// It was a `Set<Int>` — indices into the layout — until there was a target the
+/// file does not contain. An index cannot name the whole screen, and both ways
+/// of pretending it could are worse than a type: a sentinel index leaves every
+/// `contains` in the app one forgotten guard away from drawing a zone that is
+/// not there, and appending a synthetic zone to the layout makes the overlay
+/// draw the whole screen as one more box among the others, every drag, whether
+/// or not anybody is near the top edge.
+enum Selection: Equatable {
+
+    /// Zones from the file, by index. Empty is a real answer and not a mistake:
+    /// it is the cursor over a part of the screen no zone covers.
+    case zones(Set<Int>)
+
+    /// The band along the top edge.
+    ///
+    /// Deliberately not `.zones` holding every index. The union of every zone
+    /// in a file is the whole screen only for a layout that happens to tile it,
+    /// and "maximise" cannot mean something different for a layout with a hole
+    /// in it.
+    case maximised
+
+    /// The zones of the file this selection covers, which is none of them when
+    /// the whole screen is the target. The overlay asks, to know which boxes it
+    /// would otherwise draw twice.
+    var gathered: Set<Int> {
+        if case .zones(let indices) = self { return indices }
+        return []
+    }
+}

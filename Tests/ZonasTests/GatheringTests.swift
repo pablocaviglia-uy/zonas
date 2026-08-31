@@ -142,3 +142,88 @@ struct GatheringTests {
         #expect(gathering.selection(under: nil, at: parked, spanHeld: false) == [])
     }
 }
+
+/// The other half of the same answer: the band along the top edge, which is the
+/// one thing that beats the zone under the cursor.
+@Suite("Maximising from the top edge")
+struct BandSelectionTests {
+
+    @Test("In the band, with nothing gathered, the whole screen is the target")
+    func theBandWins() {
+        var gathering = Gathering()
+
+        #expect(gathering.selection(under: 0, at: parked, spanHeld: false, inBand: true)
+                == .maximised)
+    }
+
+    @Test("Outside it, the zone under the cursor is, exactly as before")
+    func outsideItNothingChanged() {
+        var gathering = Gathering()
+
+        #expect(gathering.selection(under: 0, at: parked, spanHeld: false, inBand: false)
+                == .zones([0]))
+        #expect(gathering.selection(under: nil, at: parked, spanHeld: false, inBand: false)
+                == .zones([]))
+    }
+
+    /// Spanning builds a rectangle out of zones and the whole screen is not one
+    /// of them. Without this a sweep along the top row would keep turning into
+    /// "maximise" under the hand doing it, with no combination of keys able to
+    /// stop it — and there would be no way to aim at the zones the band covers.
+    @Test("With the span key held there is no band")
+    func theSpanKeyTurnsItOff() {
+        var gathering = Gathering()
+
+        #expect(gathering.selection(under: 0, at: parked, spanHeld: true, inBand: true)
+                == .zones([0]))
+        #expect(gathering.selection(under: 1, at: parked, spanHeld: true, inBand: true)
+                == .zones([0, 1]), "and the zone under the band joins the sweep")
+    }
+
+    /// The rule that lets both keys be let go of at once, defended from the new
+    /// direction. What was gathered survives the span key for eight points, it
+    /// is what is on screen, and the band must not replace it underneath
+    /// somebody who is a few milliseconds from releasing the modifier.
+    @Test("A standing gathering is not taken away by the band")
+    func aStandingGatheringSurvives() {
+        var gathering = Gathering()
+
+        _ = gathering.selection(under: 0, at: parked, spanHeld: true, inBand: true)
+        _ = gathering.selection(under: 1, at: parked, spanHeld: true, inBand: true)
+
+        #expect(gathering.selection(under: 1, at: parked, spanHeld: false, inBand: true)
+                == .zones([0, 1]))
+    }
+
+    /// And once the hand has moved on, the gathering is gone and the band is
+    /// back — the escape hatch works from up here too.
+    @Test("Once the hand moves on, the band takes over again")
+    func andIsBackOnceTheHandMovesOn() {
+        var gathering = Gathering()
+
+        _ = gathering.selection(under: 0, at: parked, spanHeld: true, inBand: true)
+        _ = gathering.selection(under: 0, at: parked, spanHeld: false, inBand: true)
+
+        #expect(gathering.selection(under: 0, at: near(parked, by: 40), spanHeld: false,
+                                    inBand: true) == .maximised)
+    }
+
+    /// The slop is measured from where the cursor was when the key came up, so
+    /// the gathering has to be asked on every event whatever the answer turns
+    /// out to be. An early return for a cursor in the band would freeze it for
+    /// as long as somebody held the pointer up there, and the escape hatch
+    /// above would stop working after a trip through the top of the screen.
+    @Test("The band does not stop the gathering's clock")
+    func theGatheringIsStillAsked() {
+        var gathering = Gathering()
+
+        _ = gathering.selection(under: 0, at: parked, spanHeld: true, inBand: false)
+        _ = gathering.selection(under: 0, at: parked, spanHeld: false, inBand: false)
+        // Every one of these is inside the band, where the answer never depends
+        // on the gathering — and the last of them still has to have moved on.
+        _ = gathering.selection(under: 0, at: parked, spanHeld: false, inBand: true)
+        _ = gathering.selection(under: 0, at: near(parked, by: 40), spanHeld: false, inBand: true)
+
+        #expect(gathering.isEmpty)
+    }
+}

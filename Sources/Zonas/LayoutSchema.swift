@@ -73,6 +73,7 @@ extension Layout {
                   margin: defaults.margin,
                   modifier: defaults.modifier,
                   span: defaults.span,
+                  maximise: defaults.maximise,
                   ignored: try Layout.ignored(members.first { $0.key == "ignore" }))
     }
 
@@ -122,6 +123,7 @@ extension Layout {
         var margin = Layout.defaultMargin
         var modifier = Modifier.shift
         var span: Modifier?
+        var maximise = Layout.defaultMaximise
 
         init(_ member: LayoutSyntax.Member?) throws {
             // Both keys are read before either is judged, because a file may
@@ -144,6 +146,15 @@ extension Layout {
                 case "margin": margin = try points(setting)
                 case "modifier": modifier = try key(setting); modifierLine = setting.line
                 case "span": chosenSpan = (try key(setting), setting.line)
+                // Both spellings, and this is the one key in the file where
+                // that earns its line. An unrecognised key is ignored in
+                // silence by design — that is what lets a file written for a
+                // newer version keep working — so "maximize" would turn the
+                // band off without a word anywhere, and the report would be
+                // "the top edge stopped maximising" from somebody whose file
+                // says it should. `gap` and `margin` have no second spelling
+                // to get wrong; this one does.
+                case "maximise", "maximize": maximise = try points(setting)
                 default: break   // a key from a newer version; the tree keeps it
                 }
             }

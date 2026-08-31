@@ -204,6 +204,27 @@ right-hand column gives you everything between them. Change the key with
 `defaults.span` in the file, or take Control for the drag itself and the feature
 is simply not there until you name another key for it.
 
+### Filling the whole screen
+
+**Drag the window against the top edge of the screen** and Zonas offers you the
+whole of it instead of a zone: one rectangle, the word *Maximised* across the
+middle, and letting go of ⇧ fills the screen. It works in every layout,
+including one written before this existed — there is no zone to add.
+
+The band reaches from the top of the screen down 24 points into your zones, and
+the menu bar counts as part of it. That is on purpose: macOS stops the window
+when its title bar meets the menu bar but it does not stop the pointer, so
+throwing a window at the top of the screen leaves the cursor up there, and up
+there is where the band is.
+
+`defaults.maximise` is the depth, in points — `0` turns it off. And **holding
+the span key turns it off for as long as you hold it**, which is how you aim at
+the zones the band covers: gathering builds a rectangle out of zones, and the
+whole screen is not one of them.
+
+This is not macOS's full screen. There is no separate Space, the menu bar stays
+where it is, and the window is still an ordinary window you can drag out again.
+
 The menu bar item — a `rectangle.split.3x1` glyph, dimmed while the permission
 is missing — has:
 
@@ -318,6 +339,7 @@ comma after the last item:
   defaults: {
     modifier: "shift",  // shift | control | option | command
     span: "control",  // hold this too, to cover several zones at once
+    maximise: 24,  // points of top edge that fill the whole screen; 0 is off
     gap: 8,  // points of air between two windows
     margin: 0,  // points between a window and the edge of the screen
   },
@@ -350,6 +372,9 @@ Edit the file and pick **Reload Zones** from the menu bar. Notes:
 - When zones overlap, **the smallest one containing the cursor wins**. That is
   what makes a layout with one big background zone and smaller ones on top of
   it usable.
+- The top edge of the screen is the one thing that beats the zone under the
+  cursor: it fills the whole screen. `defaults.maximise` is how deep it
+  reaches, and `0` removes it.
 - Anything in `ignore` is left alone completely: dragging one of its windows
   with the key held shows no zones and snaps nothing. Matching is on the exact
   bundle identifier, which `zonas apps` will print for you.

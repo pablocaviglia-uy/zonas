@@ -63,7 +63,10 @@ enum Command: String, CaseIterable {
                   + ", gap \(Int(layout.gap)), margin \(Int(layout.margin)), "
                   + "\(layout.modifier.symbol) \(layout.modifier.rawValue)"
                   + (layout.span.map { " + \($0.symbol) \($0.rawValue) to span" }
-                     ?? ", no key to span with"))
+                     ?? ", no key to span with")
+                  + (layout.maximise > 0
+                     ? ", the top \(Int(layout.maximise)) points maximise"
+                     : ", no band to maximise from"))
             if !layout.ignored.isEmpty {
                 print("ignoring \(layout.ignored.count) app"
                       + (layout.ignored.count == 1 ? "" : "s")

@@ -490,3 +490,78 @@ struct IgnoreListTests {
         #expect(try layout(written).ignored == ["com.apple.ActivityMonitor"])
     }
 }
+
+/// The band along the top edge that offers the whole screen instead of a zone.
+@Suite("The maximise band, read from the file")
+struct MaximiseSettingTests {
+
+    private func layout(_ defaults: String) throws -> Layout {
+        try Layout(LayoutSyntax.parse("""
+        {
+          defaults: \(defaults),
+          name: "L",
+          zones: [ { name: "All", x: 0, y: 0, width: 1, height: 1 } ],
+        }
+        """))
+    }
+
+    @Test("A file that has never heard of it gets the band anyway")
+    func theDefault() throws {
+        #expect(try layout("{}").maximise == 24)
+        #expect(Layout.threeColumns.maximise == 24)
+    }
+
+    @Test("A number of points is read")
+    func itIsRead() throws {
+        #expect(try layout("{ maximise: 60 }").maximise == 60)
+    }
+
+    /// Both spellings, and this is the one key in the file where that is worth
+    /// a line of code. An unrecognised key is ignored in silence — that is what
+    /// lets a file written for a newer version keep working — so "maximize"
+    /// would turn the band off without a word anywhere, and the report would be
+    /// "the top edge stopped maximising" from somebody whose file says it
+    /// should.
+    @Test("The American spelling is the same key")
+    func bothSpellings() throws {
+        #expect(try layout("{ maximize: 60 }").maximise == 60)
+        #expect(try layout("{ maximise: 60 }").maximise == 60)
+    }
+
+    @Test("Zero turns it off, which is a value and not an absence")
+    func zeroIsOff() throws {
+        let result = try layout("{ maximise: 0 }")
+
+        #expect(result.maximise == 0)
+        #expect(result.maximiseBand(of: CGRect(x: 0, y: 0, width: 100, height: 100),
+                                    usable: CGRect(x: 0, y: 10, width: 100, height: 90)) == nil)
+    }
+
+    @Test("A negative depth is refused, with the line to go and fix")
+    func negativeIsRefused() throws {
+        let problem = #expect(throws: LayoutSchemaError.self) {
+            try layout("{ maximise: -10 }")
+        }
+
+        #expect(problem?.message.contains("zero or more") == true)
+        #expect(problem?.line == 2)
+    }
+
+    @Test("So is a depth that is not a number")
+    func wordsAreRefused() throws {
+        #expect(throws: LayoutSchemaError.self) {
+            try layout(#"{ maximise: "lots" }"#)
+        }
+    }
+
+    /// Setting it says nothing about the other keys, which is the whole point
+    /// of a block of defaults.
+    @Test("Setting it leaves the rest of the block alone")
+    func theRestIsUntouched() throws {
+        let result = try layout("{ maximise: 40 }")
+
+        #expect(result.gap == Layout.defaultGap)
+        #expect(result.margin == Layout.defaultMargin)
+        #expect(result.span == .control)
+    }
+}

@@ -34,6 +34,13 @@ part that stops the next person from cheerfully undoing it.
 > lifting a finger off the trackpad no longer ends it. Both that and the
 > multi-zone span are written up in §7 between Stage 4 and Stage 5.
 >
+> **The top edge maximises since 2026-08-31**, which is one more thing that is
+> in no stage: with the modifier held, dragging a window against the top of the
+> screen offers the whole of it instead of a zone. The write-up is under §7,
+> between the switcher and Stage 5, and the part worth knowing before touching
+> it is that the band deliberately reaches up over the menu bar, where the
+> pointer actually ends up.
+>
 > **The first-launch window landed on 2026-08-05**, which closes the gap that
 > sentence used to end on. It was Stage 2's last open piece and the one the plan
 > had called the highest leverage per day in the whole document since the
@@ -60,7 +67,7 @@ universal binary with `-u`.
 | `AXWindow.swift` | Reading and moving other apps' windows through the Accessibility API, and everything it takes to work out whether a window is one Zonas may move. The API lies; §7's Stage 4 says where. |
 | `Coords.swift` | Converting between macOS's two screen coordinate systems. The number one source of bugs in this kind of app. Also `NSScreen.displayID`. |
 | `OverlayController.swift` | The translucent layer that draws the zones. |
-| `Zone.swift` | The model: `Zone`, `Layout`, hit-testing, and the two view-space conversions the overlay and the editor share. |
+| `Zone.swift` | The model: `Zone`, `Layout`, `Selection`, hit-testing, the band along the top edge, and the two view-space conversions the overlay and the editor share. |
 | `LayoutFile.swift` | Where the file is, reading it, writing it, and the text of the one the first launch creates. |
 | `LayoutStore.swift` | The layout in memory, and which file it came from. |
 | `Welcome.swift` | The first-launch window's decisions: whether to open, which of the three permission states the app is in, and whether macOS is drawing the menu bar icon at all. No window in it, which is what makes it testable. |
@@ -76,7 +83,7 @@ universal binary with `-u`.
 | `Signature.swift` | Logs the live process's cdhash and designated requirement. |
 | `Log.swift` | File log at `~/Library/Logs/Zonas.log`. |
 | `AppDelegate.swift` | Menu bar, permissions, wiring. |
-| `Tests/ZonasTests/` | 275 tests. `swift test`, and CI runs it on every push. |
+| `Tests/ZonasTests/` | 299 tests. `swift test`, and CI runs it on every push. |
 
 ### The release pipeline, corrected
 
@@ -1766,6 +1773,113 @@ with deltas up to −60 over a hundred events. A person can do it with a real
 mouse. The reason was not found. So the feature recognises the case, says so in
 the menu, and refuses; the alternative is a pointer dragged across the desk for
 nothing on every ⌘.
+
+### Not in any stage — the top edge maximises
+
+**Added 2026-08-31, asked for by name.** The request was one sentence: with the
+modifier held, dragging a window against the top of the screen should offer to
+maximise it. It is on no list in this document, it belongs to no stage, and it
+is written up here for the same reason the span key and the switcher are — so
+the next person does not go looking for the stage it came from.
+
+**It is not a zone in the file, and that is the request.** "One more zone,
+automatically" means it has to appear in layouts that were written before it
+existed, including the author's own five-zone file, which has no `defaults`
+block at all. The obvious alternative is a fourth zone in the seed, and it
+loses twice over: a zone's hit region and the rectangle it hands the window are
+the same four fractions, so a strip across the top of the screen gives you a
+window the shape of a strip; and writing it as `{ x: 0, y: 0, width: 1, height:
+1 }` instead makes it unreachable, because smallest-wins gives every point to
+whatever smaller zone is drawn over it. A layout that tiles its screen would
+never hit it once.
+
+**The strip over the menu bar is inside the band, and it is what makes the
+gesture work at all.** macOS stops a dragged window when its title bar reaches
+the menu bar. It does not stop the pointer. So somebody throwing a window at the
+top of the screen finishes with the cursor above the usable area — in a strip
+that no zone can ever cover, because zones are fractions of what is left *after*
+the menu bar. Measured on this machine: the ultrawide's usable area starts at
+y = 30, so the band is `y ∈ [0, 54)` and thirty of those fifty-four points were
+dead space that nothing in the app could be aimed at. They are free.
+
+**In points, not in a fraction of the screen**, and it is the only number in the
+file that is. What the depth has to be big enough for is a hand throwing a
+window at a screen, and a hand is the same size on the laptop and on the
+ultrawide. The default is 24: about the height of a menu bar, about half a title
+bar, 1.7% of the ultrawide's usable height and 2.7% of the laptop's — deep
+enough to hit without aiming, shallow enough that a top row of zones does not
+notice.
+
+**The whole screen is a `Zone`, so nothing downstream needed a line.** It is the
+same trick spanning plays from the other direction: `Layout.maximised` is
+`{ x: 0, y: 0, width: 1, height: 1 }`, and `frame(in:gap:margin:)` gives it the
+margin on all four sides — because it touches all four edges — with no rule
+added for it. The overlay draws it, the drop applies it, Stage 4's clamp keeps
+it on screen.
+
+**It is called "Maximised" and not "Full Screen".** That name is taken on a Mac:
+green button, separate Space, hidden menu bar, and a window no tiler can move
+afterwards. Writing it across the screen in fifteen-point type and then doing
+something else is §3e's lying preview with words instead of rectangles.
+
+#### The two rules that keep it from stealing a drop
+
+**While the span key is held there is no band.** Spanning builds a rectangle out
+of zones and the whole screen is not one of them, so without this a sweep along
+a top row would keep turning into "maximise" under the hand doing it, with no
+combination of keys able to say no. The same rule pays a second time: holding ⌃
+is how you aim at the zones the band covers.
+
+**And it does not take a standing gathering away.** Zones gathered before the
+span key came up survive its release until the hand moves on — that is the rule
+from 2026-08-12 that lets both keys be let go of at once — and during those
+eight points they are what is on the screen. A band that claimed the drop inside
+that window would put the window somewhere nobody was looking, which is exactly
+the bug the slop exists to have fixed, arriving through a new door.
+
+Both live in `Gathering` rather than in `DragMonitor`, and for the reason that
+type exists at all: the conditions are about state it owns, and `DragMonitor`
+needs a live tap over every mouse event on the session, so nothing in it can be
+tested by anything but a person at the machine. `Gathering.selection` grew an
+overload rather than an argument, so the eleven cases that were already written
+against the old one still test the old one.
+
+**The selection stopped being a `Set<Int>`.** An index cannot name something the
+file does not contain, and both ways of pretending it could are worse than a
+type: a sentinel index leaves every `contains` in the app one forgotten guard
+away from drawing a zone that is not there, and appending a synthetic zone to
+the layout makes the overlay draw the whole screen as one more box, on every
+drag, whether or not anybody is near the top edge. `Selection` is two cases and
+a `target(of:)` that hands back a `Zone?`.
+
+**And the overlay draws nothing else while it is up.** The zones are left
+undrawn rather than dimmed under a translucent box the size of the screen: there
+is one rectangle and it is the one the window gets, which is the union's rule
+one step further out.
+
+#### Measured against the real app
+
+Three posted drags against a scratch TextEdit window, with the shipped 0.5.0
+still running alongside the build under test — which is what turns the log into
+a differential, because both write to it and only one of them has ever heard of
+a band:
+
+| drag | 0.5.0 | with the band |
+|---|---|---|
+| ⇧, cursor to `y = 4` (over the menu bar) | `nothing was selected — nothing snapped` | `snapping into "Maximised" (0, 30, 5120, 1410)` |
+| ⇧ + ⌃, cursor to `y = 38` (inside the band) | `Izquierda Arriba` | unchanged |
+| ⇧, cursor to the middle of the screen | `Centro` | unchanged |
+
+The first row is the feature and its control at once: the same gesture did
+nothing at all before, because no zone reaches up there. The second is the span
+rule, and the third is the ordinary drop that must not have moved.
+
+**Two things deliberately not done.** The editor does not draw the band — it
+edits zones, and this is not one; showing an uneditable stripe across the top of
+the editor would raise a question it cannot answer. And `zonas check` does not
+warn about an absurd depth: it cannot know how tall anybody's screen is, and a
+band that swallows the top of every zone is the same kind of legal-and-unlikely
+as a zone hanging off the edge of the screen. It prints the number instead.
 
 ### Stage 5 — The visual editor · 12 days
 

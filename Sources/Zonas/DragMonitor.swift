@@ -61,7 +61,7 @@ final class DragMonitor {
     /// committing event would answer with the modifier down and throw away
     /// everything gathered. What is committed is the last thing that was drawn,
     /// which is the only answer that cannot disagree with the screen.
-    private var selected: Set<Int> = []
+    private var selected: Selection = .zones([])
 
     /// The usable area of the screen the selection was made on, frozen with it
     /// for the same reason.
@@ -259,7 +259,7 @@ final class DragMonitor {
         isDragging = false
         isExcluded = false
         gathering.forget()
-        selected = []
+        selected = .zones([])
         selectionArea = nil
         // Cleared, or "the button came up N ms after the last movement" reports
         // the gap since the *previous* gesture's last movement for any gesture
@@ -555,13 +555,23 @@ final class DragMonitor {
     private func selection(for layout: Layout,
                            at point: CGPoint,
                            on screen: NSScreen,
-                           flags: CGEventFlags) -> Set<Int> {
-        let under = layout.zoneIndex(under: point, in: screen.cgVisibleFrame)
+                           flags: CGEventFlags) -> Selection {
+        let area = screen.cgVisibleFrame
+        let under = layout.zoneIndex(under: point, in: area)
         // A layout with no span key gathers nothing, which `Gathering` reads as
         // the key never being held: every answer is the zone under the cursor.
         let spanHeld = layout.span.map { flags.contains($0.flags) } ?? false
 
-        return gathering.selection(under: under, at: point, spanHeld: spanHeld)
+        // The band is the one place in the app where something beats the zone
+        // under the cursor, and the two conditions that stop it beating one it
+        // should not are `Gathering`'s to apply — they are about state it owns,
+        // and it is the half of this gesture a test can reach.
+        let band = layout.maximiseBand(of: screen.cgFrame, usable: area)
+
+        return gathering.selection(under: under,
+                                   at: point,
+                                   spanHeld: spanHeld,
+                                   inBand: band?.contains(point) == true)
     }
 
     private func describe(_ p: CGPoint) -> String {
@@ -639,7 +649,7 @@ final class DragMonitor {
             Log.write("commit: there was a zone but no window to move")
             return
         }
-        guard let area = selectionArea, let target = layout.union(of: selected) else {
+        guard let area = selectionArea, let target = layout.target(of: selected) else {
             Log.write("commit: nothing was selected — nothing snapped")
             return
         }

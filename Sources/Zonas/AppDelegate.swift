@@ -379,6 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 let layout = LayoutStore.shared.layout
                 Log.write("layout: reloaded — \"\(layout.name)\", \(layout.zones.count) zones, "
                           + "gap \(Int(layout.gap)), margin \(Int(layout.margin)), "
+                          + "maximise \(Int(layout.maximise)), "
                           + "\(layout.modifier.symbol)")
             case .unchanged, .failed:
                 // A save that changed nothing is not worth a line, and a save
