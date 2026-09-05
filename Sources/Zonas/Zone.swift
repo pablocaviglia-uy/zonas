@@ -161,6 +161,15 @@ struct Layout: Equatable {
     /// rather than about the screen.
     var maximise: CGFloat = Layout.defaultMaximise
 
+    /// The keys held with an arrow to move the front window from the keyboard,
+    /// or `nil` when the file has turned the shortcuts off.
+    ///
+    /// Optional for the same reason `span` is: it has to be possible for there
+    /// to be no such keys. The default is on, because a feature that arrives
+    /// off is a feature that stays undiscovered, and ⌃⌥ with an arrow belongs
+    /// to nothing on a Mac that is not already a window manager.
+    var shortcuts: Chord? = .standard
+
     /// Bundle identifiers of applications Zonas keeps its hands off.
     ///
     /// A `Set` and not an array, because the only question ever asked of it is

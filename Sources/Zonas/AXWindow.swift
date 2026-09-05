@@ -100,6 +100,37 @@ struct AXWindow {
         return .window(window)
     }
 
+    /// The window the keyboard is talking to: the focused window of the
+    /// frontmost application.
+    ///
+    /// Asked through the application rather than through the system-wide
+    /// element's `AXFocusedUIElement`, because the latter answers with the
+    /// *control* that has focus — a text field, a web area — and getting from
+    /// there to its window is the same two-mechanism walk `at(cgPoint:)` needs,
+    /// with the same 32-hop Chromium chains. The application's focused window
+    /// is one attribute, and it is the window.
+    ///
+    /// Zonas' own windows are refused by name. The editor and the welcome
+    /// window can both be key, and a key that moves "the front window" would
+    /// otherwise put the editor into a zone — which is not wrong, exactly, but
+    /// nobody has ever meant it.
+    static func focused() -> Lookup {
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            return .nothing("no application is in front")
+        }
+        let owner = app.localizedName ?? "the application in front"
+        guard app.processIdentifier != getpid() else {
+            return .nothing("the window in front is Zonas' own")
+        }
+        guard let element = AXUIElementCreateApplication(app.processIdentifier)
+                .relative(kAXFocusedWindowAttribute) else {
+            return .nothing("\(owner) has no focused window")
+        }
+        let window = AXWindow(element: element)
+        if let refusal = window.refusal { return .nothing(refusal) }
+        return .window(window)
+    }
+
     /// What was under the point: a window Zonas will move, or a sentence saying
     /// why not.
     ///

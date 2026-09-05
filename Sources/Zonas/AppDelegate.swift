@@ -6,6 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var statusItem: NSStatusItem?
     private var launchAtLoginItem: NSMenuItem?
     private var modifierHintItem: NSMenuItem?
+    private var shortcutHintItem: NSMenuItem?
+    private let shortcuts = ShortcutController()
     private var problemItem: NSMenuItem?
     private var switcherMenu: NSMenu?
 
@@ -48,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         wireTheSwitcher()
         startMonitor()
         startWatchingTheLayout()
+        shortcuts.apply(LayoutStore.shared.layout.shortcuts)
 
         welcome.openIfFirstLaunch(readiness: readiness)
         describeTheIcon()
@@ -381,6 +384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                           + "gap \(Int(layout.gap)), margin \(Int(layout.margin)), "
                           + "maximise \(Int(layout.maximise)), "
                           + "\(layout.modifier.symbol)")
+                self?.shortcuts.apply(layout.shortcuts)
             case .unchanged, .failed:
                 // A save that changed nothing is not worth a line, and a save
                 // that broke the file already logged why, with the line number.
@@ -506,6 +510,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let hint = NSMenuItem(title: modifierHint, action: nil, keyEquivalent: "")
         modifierHintItem = hint
         menu.addItem(hint)
+        let keys = NSMenuItem(title: shortcutHint, action: nil, keyEquivalent: "")
+        shortcutHintItem = keys
+        menu.addItem(keys)
 
         // Hidden unless the file is broken. It is above the separator, where the
         // eye goes first, and clicking it opens the file at the problem rather
@@ -587,6 +594,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc private func reloadLayout() {
         switch LayoutStore.shared.reload() {
         case .changed, .unchanged:
+            shortcuts.apply(LayoutStore.shared.layout.shortcuts)
             showProblem(nil)
         case .failed:
             showProblem(LayoutStore.shared.problem)
@@ -623,6 +631,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // The modifier comes from the file and the file can change under us, so
         // the reminder is re-read rather than baked in when the menu was built.
         modifierHintItem?.title = modifierHint
+        shortcutHintItem?.title = shortcutHint
+        shortcutHintItem?.isHidden = LayoutStore.shared.layout.shortcuts == nil
         showProblem(LayoutStore.shared.problem)
         // The submenu has no delegate of its own on purpose: this fires before
         // the main menu is drawn, which is well before anybody has moved the
@@ -664,6 +674,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let drag = "Drag a window with \(key), let \(key) go to place it"
         guard let span = layout.span else { return drag }
         return "\(drag) — \(span.symbol) covers several zones"
+    }
+
+    /// The second line of instructions, for the keyboard. Hidden rather than
+    /// blank when the file has turned the keys off: an empty menu item looks
+    /// like a bug.
+    private var shortcutHint: String {
+        guard let chord = LayoutStore.shared.layout.shortcuts else { return "" }
+        return "\(chord.symbol) with an arrow moves the front window — "
+            + "\(chord.symbol)↩ fills the screen, \(chord.symbol)Z places it"
     }
 
     /// Leaves the item greyed out in the `.build/` copy. Without this `NSMenu`

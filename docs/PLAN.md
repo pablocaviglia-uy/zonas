@@ -79,11 +79,13 @@ universal binary with `-u`.
 | `Fraction.swift` | The denominators the file can write, which are the ones the editor snaps to. |
 | `Switcher.swift` | Which screen the ⌘Tab switcher opens on: the pin, when a correction is owed, and the path the pointer walks to move the Dock. No system calls, which is what makes it testable. |
 | `DockDisplay.swift` | Reading the Dock's screen out of its own window, and the synthetic walk that moves it. The switcher follows the Dock — §7's write-up says how long that took to establish. |
+| `Shortcuts.swift` | The keyboard: `Chord`, `Direction`, and the rule that decides which zone an arrow sends the front window to. Arithmetic only, which is what makes it testable. |
+| `ShortcutController.swift` | Registering those keys with the system through `RegisterEventHotKey`, and moving the window when one is pressed. §7's write-up says why not an event tap. |
 | `LaunchAtLogin.swift` | `SMAppService` registration. |
 | `Signature.swift` | Logs the live process's cdhash and designated requirement. |
 | `Log.swift` | File log at `~/Library/Logs/Zonas.log`. |
 | `AppDelegate.swift` | Menu bar, permissions, wiring. |
-| `Tests/ZonasTests/` | 299 tests. `swift test`, and CI runs it on every push. |
+| `Tests/ZonasTests/` | 326 tests. `swift test`, and CI runs it on every push. |
 
 ### The release pipeline, corrected
 
@@ -1880,6 +1882,140 @@ the editor would raise a question it cannot answer. And `zonas check` does not
 warn about an absurd depth: it cannot know how tall anybody's screen is, and a
 band that swallows the top of every zone is the same kind of legal-and-unlikely
 as a zone hanging off the edge of the screen. It prints the number instead.
+
+### Not in any stage — moving the front window from the keyboard
+
+**Added 2026-09-04, asked for by name**, with one condition attached: *no
+movement that, from a given position, does two different things on two
+presses.* That is Rectangle's ⌃⌥←, which gives the left half, then the left
+third, then two thirds, according to what you pressed before — and it was named
+as the thing not to build. On no list in this document either, and here for the
+same reason the other three are.
+
+**What it is.** Hold ⌃⌥ and press an arrow and the front window goes to the
+zone in that direction; ⌃⌥↩ fills the screen — the same `Layout.maximised` the
+top edge offers; ⌃⌥Z snaps the window into the zone its middle is over.
+`defaults.shortcuts` names the chord, `"control+option"` unless the file says
+otherwise and `false` for off. The six keys are fixed. ⌃⌥ is what Rectangle,
+Magnet and Spectacle all use, so it is what anybody coming from one of them
+already has in their fingers, and ↩ for the whole screen is the same
+inheritance; Z is the one letter none of them took, and it is for *zone*.
+
+**The rule, and the two versions of it that lost.** → goes to the nearest
+zone that is entirely past the middle of the window and *beside* it — a line
+from the window's middle runs into the zone, or the window is tall enough to
+cover a whole window in that zone. Of several at the same distance, the
+topmost; for ↑ and ↓, the leftmost. File order only between zones with the same
+geometry. Nothing beside means nothing happens, and the log says so.
+
+The first version of "beside" was "any zone sharing some of the window's
+height", which is what i3 does, and it lasted one test: a window sitting in the
+middle column and hanging 280 points into the left one was sent to the
+bottom-left zone by ↓, because the zone under that sliver counted as below.
+Nobody looking at that window calls the bottom-left zone "below it".
+
+The second was "the line from the middle" alone — the drag's own question asked
+with the middle of the window — and it lasted one afternoon at the desk. With
+the right-hand column split at 0.4765, the middle of "Centro" is in the lower
+zone, so → from the top-left corner went through the middle and came out at the
+*bottom*-right, and the report was that it should have stayed in the top row.
+It should. A full-height column is beside both zones; the fix is to say so,
+and to let the tie-break — the topmost — choose. That is the one promise a rule
+with no memory can keep: from a full-height column, → is the top of the next
+column *whichever row you came from*, and ↓ then reaches the other one. The
+alternative, remembering which row the window came from, is precisely the
+history the condition on this feature forbids.
+
+Both versions are written down because each looks sufficient until it is
+measured, and the third will too. The cover test is against the zone's frame,
+gap and margin included, because a window snapped into a column with a margin
+is shorter than the column's hit region and would cover nothing.
+
+"Past the middle" rather than "past the edge" is for floating windows: most of
+them overlap the zone beside them by a few points, and "past the edge" would
+refuse every one. It is also what keeps → from ever choosing the zone the
+window is already in — its near edge is on the wrong side of the middle — so
+there is no need for a rule that says so.
+
+A zone per number, ⌃⌥1…9 in file order, was considered and not built. It is the
+strongest form of the condition — the answer does not depend on the position at
+all — but the numbers are visible nowhere, and the overlay would have to grow
+them. It is the obvious next thing if the arrows turn out not to be enough.
+
+**The mechanism is `RegisterEventHotKey`, and that is the decision in this
+feature.** The other two ways for a menu bar app to hear a key — a `CGEventTap`
+on `keyDown`, `NSEvent.addGlobalMonitorForEvents` — hand the process every
+keystroke on the machine, to be filtered for six. `DragMonitor` refuses a
+permanent keyboard tap by name, because it is the question an open-source
+window manager should not invite; opening one in a second file would undo that.
+A Carbon hot key is the honest shape: six combinations named to macOS, which
+says when one is pressed and nothing else. It also takes the key, so ⌃⌥→ does
+not also move the cursor a word in the app in front, and it needs no permission
+of its own. Rectangle, Magnet, Alfred and Raycast register theirs the same way.
+
+**A hot key does not fire for an event the same process posts**, and that was
+found while working out how this could be verified at all. `CGEvent.post` at
+the HID tap, at the session tap, and with ⌃ and ⌥ pressed for real around the
+arrow: none of the three reached the handler. The same key sent by System
+Events from another process did. So the verification is `osascript … key code
+124 using {control down, option down}` against the dev build, with a scratch
+TextEdit window as the target, which is the shape the drag's own verification
+already has.
+
+**And a hot key fires in every process that registered it.** Found the same
+way, one afternoon later: with the installed copy holding ⌃⌥ and the dev build
+holding it too, one press of → moved the scratch window *two* zones — the
+installed copy sent it from the corner into the middle, and the dev build, a
+few milliseconds behind, from the middle to the right — and every refusal
+appeared in the log twice. Carbon does not give a combination to whoever asked
+first; `RegisterEventHotKey` answered `noErr` to both, and both were called. So
+measuring the keys means quitting the installed copy first, and `build.sh -r`
+quitting it before it installs is what keeps a user from ever meeting this.
+"Two Zonas can run at once" was true of the drag and is not true of the keys.
+
+Measured that way against the real five-zone layout, on the laptop screen
+(0, 33, 1728, 1084), from a window whose middle was in "Derecha 4":
+
+| key | result |
+|---|---|
+| → | nothing → of it on this screen — it is the right edge |
+| ↓ | nothing ↓ of it |
+| ← | Centro (436, 33, 856, 1084) |
+| ← | Izquierda Arriba — beside both left-hand zones, the top one wins |
+| ↓ | Izquierda Abajo |
+| ↑ | Izquierda Arriba |
+| ↩ | Maximised (0, 33, 1728, 1084) |
+| Z | Centro — the middle of the screen is in the middle column |
+| Z | Centro, again, the same line |
+
+and → once more from the starting frame logged the same line as the first
+time. The reported path, replayed after the rule changed and with the installed
+copy quit: from "Izquierda Arriba", → Centro, → **Derecha 3**, ↓ Derecha 4,
+← Centro, ← Izquierda Arriba; from "Izquierda Abajo", → Centro, → Derecha 3
+again — the top, whichever row it came from — and ↑ from there "nothing is ↑
+of it". ↩ then ↑ from the maximised window gave Izquierda Arriba: a window that
+covers every zone is beside all of them, and reading order answers each arrow. Nothing in the sequence read a previous keypress, because nothing stores
+one: `ShortcutController` holds a chord and six registrations and no other
+state, and `Layout.neighbour` is a function of a frame, a direction and an area.
+
+**Two rules the schema enforces.** A chord of one key is refused, with the line
+number: ⌥→ is a word in every text field, ⌘→ the end of the line, ⇧→ a
+selection, ⌃→ the next Space, and a global hot key takes the combination from
+every application at once — not a thing a config file should be able to do by
+accident. And the setting is on for a file that predates it, like the band: a
+feature that arrives off stays undiscovered.
+
+**Zonas' own windows are refused by name** in `AXWindow.focused()`. The editor
+and the welcome window can both be key, and ⌃⌥→ with the editor in front would
+put the editor into a zone — not wrong, exactly, but never meant. The focused
+window is asked of the application rather than of the system-wide element,
+whose `AXFocusedUIElement` is the *control* with focus and needs the same
+32-hop walk `at(cgPoint:)` needs to reach its window.
+
+**What it does not do**, said here so nobody wonders: cross screens — → at the
+right edge of a screen stays there, and the other screen's zones are a
+different `area` — and draw anything. The overlay is the drag's, and a keypress
+has nothing to preview because by the time it could, it has already happened.
 
 ### Stage 5 — The visual editor · 12 days
 

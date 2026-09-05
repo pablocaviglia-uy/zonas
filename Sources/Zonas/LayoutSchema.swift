@@ -74,6 +74,7 @@ extension Layout {
                   modifier: defaults.modifier,
                   span: defaults.span,
                   maximise: defaults.maximise,
+                  shortcuts: defaults.shortcuts,
                   ignored: try Layout.ignored(members.first { $0.key == "ignore" }))
     }
 
@@ -124,6 +125,7 @@ extension Layout {
         var modifier = Modifier.shift
         var span: Modifier?
         var maximise = Layout.defaultMaximise
+        var shortcuts: Chord? = .standard
 
         init(_ member: LayoutSyntax.Member?) throws {
             // Both keys are read before either is judged, because a file may
@@ -155,6 +157,7 @@ extension Layout {
                 // says it should. `gap` and `margin` have no second spelling
                 // to get wrong; this one does.
                 case "maximise", "maximize": maximise = try points(setting)
+                case "shortcuts": shortcuts = try chord(setting)
                 default: break   // a key from a newer version; the tree keeps it
                 }
             }
@@ -182,6 +185,32 @@ extension Layout {
         private static func resolveSpan(_ chosen: Modifier?, against modifier: Modifier) -> Modifier? {
             if let chosen { return chosen }
             return modifier == .control ? nil : .control
+        }
+
+        /// The keys that move the front window: `"control+option"`, or `false`.
+        ///
+        /// `false` and not `"none"`, because there is nothing to name — with
+        /// `span` the absence has to be expressed through the drag key, but here
+        /// it is simply off, and a boolean says so without inventing a word.
+        private func chord(_ member: LayoutSyntax.Member) throws -> Chord? {
+            if case .bool(false) = member.node { return nil }
+            guard case .string(let text) = member.node, let chord = Chord(text) else {
+                throw LayoutSchemaError(
+                    line: member.line,
+                    message: "shortcuts has to be two or more of "
+                        + Modifier.allCases.map { "\"\($0.rawValue)\"" }.joined(separator: ", ")
+                        + " joined with +, like \"control+option\" — or false to turn them off")
+            }
+            // One key with an arrow already belongs to every text field on the
+            // machine, and a hot key takes it away from all of them at once.
+            guard chord.keys.count >= 2 else {
+                throw LayoutSchemaError(
+                    line: member.line,
+                    message: "shortcuts needs at least two keys — "
+                        + "\(chord.symbol)→ on its own is already something else's in every "
+                        + "application, and a hot key would take it from all of them")
+            }
+            return chord
         }
 
         private func points(_ member: LayoutSyntax.Member) throws -> CGFloat {

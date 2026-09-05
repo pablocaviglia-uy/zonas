@@ -565,3 +565,78 @@ struct MaximiseSettingTests {
         #expect(result.span == .control)
     }
 }
+
+/// The keys that move the front window, as the file names them.
+@Suite("The shortcuts key, read from the file")
+struct ShortcutsSettingTests {
+
+    private func layout(_ defaults: String) throws -> Layout {
+        try Layout(LayoutSyntax.parse("""
+        {
+          defaults: \(defaults),
+          name: "L",
+          zones: [ { name: "All", x: 0, y: 0, width: 1, height: 1 } ],
+        }
+        """))
+    }
+
+    /// On by default, and on for a file that predates the feature. A feature
+    /// that arrives off is a feature that stays undiscovered.
+    @Test("A file that says nothing gets control+option")
+    func theDefault() throws {
+        #expect(try layout("{}").shortcuts == .standard)
+        #expect(Layout.threeColumns.shortcuts == .standard)
+    }
+
+    @Test("A chord is read, in any order")
+    func itIsRead() throws {
+        #expect(try layout(#"{ shortcuts: "command+shift" }"#).shortcuts?.keys == [.command, .shift])
+        #expect(try layout(#"{ shortcuts: "option + control" }"#).shortcuts == .standard)
+    }
+
+    @Test("false turns them off")
+    func falseIsOff() throws {
+        #expect(try layout("{ shortcuts: false }").shortcuts == nil)
+    }
+
+    /// The foot-gun this exists to catch: a single key with an arrow is a word,
+    /// a line end, a selection or a Space in every application on the machine,
+    /// and a hot key would take it from all of them at once.
+    @Test("One key on its own is refused, and the message says why")
+    func oneKeyIsRefused() throws {
+        let problem = #expect(throws: LayoutSchemaError.self) {
+            try layout(#"{ shortcuts: "option" }"#)
+        }
+
+        #expect(problem?.message.contains("at least two keys") == true)
+        #expect(problem?.message.contains("⌥→") == true)
+        #expect(problem?.line == 2)
+    }
+
+    @Test("A name that is not a key lists the ones that are")
+    func unknownKeyIsRefused() throws {
+        let problem = #expect(throws: LayoutSchemaError.self) {
+            try layout(#"{ shortcuts: "ctrl+alt" }"#)
+        }
+
+        #expect(problem?.message.contains("\"control\"") == true)
+        #expect(problem?.message.contains("false to turn them off") == true)
+    }
+
+    @Test("true is not a chord")
+    func trueIsRefused() throws {
+        #expect(throws: LayoutSchemaError.self) {
+            try layout("{ shortcuts: true }")
+        }
+    }
+
+    @Test("Setting it leaves the rest of the block alone")
+    func theRestIsUntouched() throws {
+        let result = try layout(#"{ shortcuts: "command+option" }"#)
+
+        #expect(result.gap == Layout.defaultGap)
+        #expect(result.modifier == .shift)
+        #expect(result.span == .control)
+        #expect(result.maximise == Layout.defaultMaximise)
+    }
+}

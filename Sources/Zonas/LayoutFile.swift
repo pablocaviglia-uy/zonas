@@ -78,6 +78,12 @@ enum LayoutFile {
         // the top. 0 turns it off, and holding the span key turns it off for
         // as long as you hold it, which is how you reach the zones under it.
         maximise: 24,
+        // Move the window you are working in from the keyboard. Hold these and
+        // press an arrow to send it to the zone in that direction; ↩ fills the
+        // screen and Z snaps it into the zone it is over. Where an arrow sends
+        // a window depends only on where the window is — the same key from the
+        // same place always does the same thing. false turns them off.
+        shortcuts: "control+option",
         gap: 8,  // points of air between two windows
         margin: 0,  // points between a window and the edge of the screen
       },

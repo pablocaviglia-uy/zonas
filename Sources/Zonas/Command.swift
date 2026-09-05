@@ -66,7 +66,9 @@ enum Command: String, CaseIterable {
                      ?? ", no key to span with")
                   + (layout.maximise > 0
                      ? ", the top \(Int(layout.maximise)) points maximise"
-                     : ", no band to maximise from"))
+                     : ", no band to maximise from")
+                  + (layout.shortcuts.map { ", \($0.symbol) with the arrows moves the front window" }
+                     ?? ", no keyboard shortcuts"))
             if !layout.ignored.isEmpty {
                 print("ignoring \(layout.ignored.count) app"
                       + (layout.ignored.count == 1 ? "" : "s")

@@ -225,12 +225,47 @@ whole screen is not one of them.
 This is not macOS's full screen. There is no separate Space, the menu bar stays
 where it is, and the window is still an ordinary window you can drag out again.
 
+### From the keyboard
+
+**Hold ⌃⌥ and press an arrow** to send the window you are working in to the
+zone in that direction. **⌃⌥↩** fills the screen, and **⌃⌥Z** snaps the window
+into the zone it is already over. The keys are taken from the application in
+front, so ⌃⌥→ moves the window rather than also moving the cursor a word.
+
+**Where an arrow sends a window depends only on where the window is.** There is
+no cycling. Rectangle's ⌃⌥← gives you the left half, then the left third, then
+two thirds, depending on what you pressed before; this deliberately does not.
+→ goes to the nearest zone to the right that is beside the window — a line
+from the window's middle runs into it, or the window is tall enough to cover
+it — and the same window in the same place gets the same answer every time,
+whatever came before. A window that is not in any zone moves relative to where
+it is: from the middle of the screen, → is the zone to the right of the middle.
+
+Two things worth knowing. When a window is beside several zones at once — a
+full-height column next to two stacked ones — the **top** one wins, and for ↑
+and ↓ the leftmost: reading order, whichever row you came from. And there is no
+diagonal: if nothing is beside the window in that direction, the key does
+nothing and the log says so.
+
+`defaults.shortcuts` names the keys: `"control+option"` unless you say
+otherwise, any two or more of `shift`, `control`, `option` and `command` joined
+with `+`, or `false` to turn them off. One key on its own is refused — ⌥→ is a
+word in every text field on the machine, and a global shortcut would take it
+from all of them.
+
+Zonas registers exactly these six combinations with macOS and hears nothing
+else you type. It is the mechanism Rectangle, Alfred and Raycast use, and it
+needs no permission beyond the Accessibility one Zonas already has. If another
+window manager holds one of the combinations, that key does nothing here and
+the log names it.
+
 The menu bar item — a `rectangle.split.3x1` glyph, dimmed while the permission
 is missing — has:
 
 | Item | |
 |---|---|
-| `Hold ⇧ while dragging a window` | Reminder, not a button |
+| `Drag a window with ⇧, let ⇧ go to place it — ⌃ covers several zones` | Reminder, not a button |
+| `⌃⌥ with an arrow moves the front window — ⌃⌥↩ fills the screen, ⌃⌥Z places it` | Also a reminder; hidden when the file turns the keys off |
 | `Edit Zones…` | The visual editor — see below |
 | `Edit the File…` | Opens `zonas.json5` in your default editor |
 | `Reload Zones` (⌘R) | Re-reads the file after you edit it |
@@ -340,6 +375,7 @@ comma after the last item:
     modifier: "shift",  // shift | control | option | command
     span: "control",  // hold this too, to cover several zones at once
     maximise: 24,  // points of top edge that fill the whole screen; 0 is off
+    shortcuts: "control+option",  // hold these and press an arrow to move the front window
     gap: 8,  // points of air between two windows
     margin: 0,  // points between a window and the edge of the screen
   },
