@@ -75,6 +75,7 @@ extension Layout {
                   span: defaults.span,
                   maximise: defaults.maximise,
                   shortcuts: defaults.shortcuts,
+                  windowSwitcher: defaults.windowSwitcher,
                   ignored: try Layout.ignored(members.first { $0.key == "ignore" }))
     }
 
@@ -126,6 +127,7 @@ extension Layout {
         var span: Modifier?
         var maximise = Layout.defaultMaximise
         var shortcuts: Chord? = .standard
+        var windowSwitcher = true
 
         init(_ member: LayoutSyntax.Member?) throws {
             // Both keys are read before either is judged, because a file may
@@ -158,6 +160,7 @@ extension Layout {
                 // to get wrong; this one does.
                 case "maximise", "maximize": maximise = try points(setting)
                 case "shortcuts": shortcuts = try chord(setting)
+                case "windowSwitcher": windowSwitcher = try flag(setting)
                 default: break   // a key from a newer version; the tree keeps it
                 }
             }
@@ -211,6 +214,18 @@ extension Layout {
                         + "application, and a hot key would take it from all of them")
             }
             return chord
+        }
+
+        /// `true` or `false`, and nothing that merely looks like one. `"false"`
+        /// in quotes is text, and reading it as off would make the one spelling
+        /// that is wrong behave exactly like the one that is right — until the
+        /// day somebody writes `"no"`.
+        private func flag(_ member: LayoutSyntax.Member) throws -> Bool {
+            guard case .bool(let value) = member.node else {
+                throw LayoutSchemaError(line: member.line,
+                                        message: "\(member.key) has to be true or false, without quotes")
+            }
+            return value
         }
 
         private func points(_ member: LayoutSyntax.Member) throws -> CGFloat {

@@ -272,6 +272,138 @@ struct AXWindow {
         return CGRect(origin: origin, size: size)
     }
 
+    var title: String? { element.title }
+    var subrole: String? { element.subrole }
+    var isMinimized: Bool { element.flag(kAXMinimizedAttribute) == true }
+
+    // MARK: - Every window, for ⌥Tab
+
+    /// Every window an application lists, in its own order — or `nil` when it
+    /// did not answer, which is not the same as having no windows, and which
+    /// ⌥Tab treats differently.
+    ///
+    /// For most applications that means the windows on the Spaces you are
+    /// looking at, plus the minimized ones; windows on other Spaces are not in
+    /// it, which is a property of the API and not a filter applied here.
+    static func windows(of pid: pid_t) -> [AXWindow]? {
+        // The messaging timeout is set when `system` is first touched, and
+        // every element created before that gets the default of 1.5 s instead.
+        // A drag has always touched it first. ⌥Tab can be the first thing
+        // anybody does after launch, and without this line one application
+        // that has stopped answering would hold the list up for six times as
+        // long.
+        _ = system
+        let application = AXUIElementCreateApplication(pid)
+        guard let windows = application.attribute(kAXWindowsAttribute) as? [AXUIElement] else {
+            return nil
+        }
+        return windows.map(AXWindow.init(element:))
+    }
+
+    /// The WindowServer's number for this window, or `nil`.
+    ///
+    /// **This is the one private symbol in Zonas**, and it is here because
+    /// nothing public joins the two halves of what ⌥Tab needs. The stacking
+    /// order of the screen exists only in the WindowServer's list; the handle
+    /// that can raise a window exists only in the Accessibility API; and the
+    /// window number is the only thing both of them know. Matching on the
+    /// frame instead fails in precisely this app — see
+    /// `WindowSwitcher.entries`. `_AXUIElementGetWindow` is what yabai,
+    /// Hammerspoon and AltTab all use for the same join.
+    ///
+    /// **Looked up at run time rather than linked.** Linked, a macOS that no
+    /// longer exports it would refuse to launch Zonas at all, and the drag has
+    /// never needed it. Looked up, it costs ⌥Tab and nothing else, and the log
+    /// says so.
+    var windowID: CGWindowID? {
+        guard let getWindow = AXWindow.getWindow else { return nil }
+        var id: CGWindowID = 0
+        guard getWindow(element, &id) == .success, id != 0 else { return nil }
+        return id
+    }
+
+    /// Whether this macOS can tell ⌥Tab which window is which.
+    static var canNumberWindows: Bool { getWindow != nil }
+
+    private typealias GetWindow = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
+
+    private static let getWindow: GetWindow? = {
+        // RTLD_DEFAULT, which Swift does not import: every image already
+        // loaded, HIServices among them.
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_AXUIElementGetWindow") else {
+            return nil
+        }
+        return unsafeBitCast(symbol, to: GetWindow.self)
+    }()
+
+    /// Brings the window in front of every other one and gives it the
+    /// keyboard.
+    ///
+    /// Window first and application last: raise it among its own
+    /// application's windows, make it that application's main window, and
+    /// only then activate the application — which brings forward its main
+    /// window and no other, so the one that arrives is the one chosen and the
+    /// rest of the application's windows stay where they were. Measured from a
+    /// background process, with Finder in front and TextEdit holding four
+    /// documents behind it, each time aiming at the document furthest back:
+    /// this order, the reverse order, and both orders with the application
+    /// asked through `kAXFrontmostAttribute` instead of activated, four
+    /// attempts each — 16 out of 16 arrived, within 30 ms.
+    ///
+    /// The one miss was before that run, on the very first attempt of the
+    /// day: this order, and a different application ended up in front. It
+    /// did not happen again, and whether it was the method or a click at that
+    /// moment was never established — which is why the answer is read back
+    /// rather than trusted, and why `askToComeForward` exists.
+    ///
+    /// Nothing is returned, because nothing it could return would be true yet:
+    /// the application does the work, in its own time. `isInFront` is the
+    /// readback Rule 8 asks for.
+    func bringForward() {
+        guard let pid, let application = NSRunningApplication(processIdentifier: pid) else { return }
+        if application.isHidden { application.unhide() }
+        if isMinimized { element.setFlag(kAXMinimizedAttribute, false) }
+        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        element.setFlag(kAXMainAttribute, true)
+        application.activate(options: [])
+    }
+
+    /// Presses the window's close button, exactly as a click on it would, and
+    /// says whether there was one to press.
+    ///
+    /// The button and not a quit or a kill, so that closing means whatever it
+    /// means to the application: a document with unsaved changes asks first,
+    /// and the window stays open until somebody answers. Whether it closed is
+    /// the caller's to read back — Rule 8 — because pressing the button is a
+    /// request like every other write here.
+    @discardableResult
+    func close() -> Bool {
+        guard let button = element.relative(kAXCloseButtonAttribute) else { return false }
+        return AXUIElementPerformAction(button, kAXPressAction as CFString) == .success
+    }
+
+    /// The second way to ask, for when the first did not take: the
+    /// application is asked to come forward through Accessibility, which it
+    /// then does itself, rather than being activated from outside.
+    func askToComeForward() {
+        guard let pid else { return }
+        AXUIElementCreateApplication(pid).setFlag(kAXFrontmostAttribute, true)
+        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+    }
+
+    /// Whether this is the window the keyboard is talking to: its application
+    /// is the frontmost one, and this is that application's focused window.
+    var isInFront: Bool {
+        guard let pid else { return false }
+        let application = AXUIElementCreateApplication(pid)
+        guard application.flag(kAXFrontmostAttribute) == true,
+              let focused = application.relative(kAXFocusedWindowAttribute) else { return false }
+        if let mine = windowID, let theirs = AXWindow(element: focused).windowID {
+            return mine == theirs
+        }
+        return CFEqual(focused, element)
+    }
+
     /// Places the window into a rectangle (CG coordinates).
     ///
     /// Position and size are two separate attributes and the order matters. If

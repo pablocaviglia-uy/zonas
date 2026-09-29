@@ -7,7 +7,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var launchAtLoginItem: NSMenuItem?
     private var modifierHintItem: NSMenuItem?
     private var shortcutHintItem: NSMenuItem?
+    private var windowsHintItem: NSMenuItem?
+    private var previewsItem: NSMenuItem?
     private let shortcuts = ShortcutController()
+    private let windowSwitcher = WindowSwitcherController()
     private var problemItem: NSMenuItem?
     private var switcherMenu: NSMenu?
 
@@ -51,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         startMonitor()
         startWatchingTheLayout()
         shortcuts.apply(LayoutStore.shared.layout.shortcuts)
+        windowSwitcher.apply(LayoutStore.shared.layout.windowSwitcher)
 
         welcome.openIfFirstLaunch(readiness: readiness)
         describeTheIcon()
@@ -385,6 +389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                           + "maximise \(Int(layout.maximise)), "
                           + "\(layout.modifier.symbol)")
                 self?.shortcuts.apply(layout.shortcuts)
+                self?.windowSwitcher.apply(layout.windowSwitcher)
             case .unchanged, .failed:
                 // A save that changed nothing is not worth a line, and a save
                 // that broke the file already logged why, with the line number.
@@ -513,6 +518,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let keys = NSMenuItem(title: shortcutHint, action: nil, keyEquivalent: "")
         shortcutHintItem = keys
         menu.addItem(keys)
+        let windows = NSMenuItem(title: windowsHint, action: nil, keyEquivalent: "")
+        windowsHintItem = windows
+        menu.addItem(windows)
 
         // Hidden unless the file is broken. It is above the separator, where the
         // eye goes first, and clicking it opens the file at the problem rather
@@ -547,6 +555,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(launchItem)
 
         menu.addItem(ownItem("Accessibility Permissions…", #selector(openPermissions)))
+        // The only place Zonas ever asks for Screen Recording. ⌥Tab works
+        // without it; this adds the picture of the chosen window.
+        let previews = ownItem("Show Window Previews…", #selector(showWindowPreviews))
+        previewsItem = previews
+        menu.addItem(previews)
         // The welcome window opens itself once and then never again, which is
         // right — and would strand the person who closed it before reading it,
         // which is not. One line buys the way back.
@@ -595,6 +608,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         switch LayoutStore.shared.reload() {
         case .changed, .unchanged:
             shortcuts.apply(LayoutStore.shared.layout.shortcuts)
+            windowSwitcher.apply(LayoutStore.shared.layout.windowSwitcher)
             showProblem(nil)
         case .failed:
             showProblem(LayoutStore.shared.problem)
@@ -633,6 +647,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         modifierHintItem?.title = modifierHint
         shortcutHintItem?.title = shortcutHint
         shortcutHintItem?.isHidden = LayoutStore.shared.layout.shortcuts == nil
+        windowsHintItem?.isHidden = !LayoutStore.shared.layout.windowSwitcher
+        // Asked every time the menu opens: the switch is in System Settings,
+        // and nothing tells Zonas when it is flipped. Once it is on, the item
+        // says so and does nothing — turning it off is Settings' job too.
+        previewsItem?.isHidden = !LayoutStore.shared.layout.windowSwitcher
+        let previewing = WindowPreviews.isAllowed
+        previewsItem?.title = previewing ? "Window Previews Are On" : "Show Window Previews…"
+        previewsItem?.action = previewing ? nil : #selector(showWindowPreviews)
         showProblem(LayoutStore.shared.problem)
         // The submenu has no delegate of its own on purpose: this fires before
         // the main menu is drawn, which is well before anybody has moved the
@@ -685,12 +707,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             + "\(chord.symbol)↩ fills the screen, \(chord.symbol)Z places it"
     }
 
+    /// The third, for ⌥Tab. A constant rather than a computed line like the two
+    /// above, because the file can turn the switcher off but cannot change its
+    /// keys — and hidden, not blank, when it is off.
+    private let windowsHint = "⌥Tab goes through every window, one at a time — ⇧ goes back"
+
     /// Leaves the item greyed out in the `.build/` copy. Without this `NSMenu`
     /// would enable it anyway, because the target responds to the selector — and
     /// touching it from there would leave the login item pointing at an ephemeral
     /// bundle.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         item === launchAtLoginItem ? LaunchAtLogin.isInstalledCopy : true
+    }
+
+    @objc private func showWindowPreviews() {
+        Log.write("windows: asking for Screen Recording, for ⌥Tab's previews")
+        WindowPreviews.request()
     }
 
     @objc private func openPermissions() {

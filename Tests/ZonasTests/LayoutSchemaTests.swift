@@ -640,3 +640,52 @@ struct ShortcutsSettingTests {
         #expect(result.maximise == Layout.defaultMaximise)
     }
 }
+
+/// ⌥Tab, as the file turns it on and off.
+@Suite("The windowSwitcher key, read from the file")
+struct WindowSwitcherSettingTests {
+
+    private func layout(_ defaults: String) throws -> Layout {
+        try Layout(LayoutSyntax.parse("""
+        {
+          defaults: \(defaults),
+          name: "L",
+          zones: [ { name: "All", x: 0, y: 0, width: 1, height: 1 } ],
+        }
+        """))
+    }
+
+    /// On for a file that predates it, which is every file there is today.
+    @Test("A file that says nothing has it on")
+    func theDefault() throws {
+        #expect(try layout("{}").windowSwitcher)
+        #expect(Layout.threeColumns.windowSwitcher)
+    }
+
+    @Test("false turns it off, and true leaves it on")
+    func falseIsOff() throws {
+        #expect(try layout("{ windowSwitcher: false }").windowSwitcher == false)
+        #expect(try layout("{ windowSwitcher: true }").windowSwitcher)
+    }
+
+    /// `"false"` in quotes is text. Reading it as off would make the wrong
+    /// spelling work, and then `"no"` would not.
+    @Test("Anything but true or false is refused, with the line it is on")
+    func onlyABoolean() throws {
+        for value in [#""false""#, "0", #""option""#] {
+            let problem = #expect(throws: LayoutSchemaError.self) {
+                try layout("{ windowSwitcher: \(value) }")
+            }
+            #expect(problem?.message.contains("true or false") == true)
+            #expect(problem?.line == 2)
+        }
+    }
+
+    @Test("Turning it off leaves the keyboard shortcuts alone")
+    func theRestIsUntouched() throws {
+        let result = try layout("{ windowSwitcher: false }")
+
+        #expect(result.shortcuts == .standard)
+        #expect(result.modifier == .shift)
+    }
+}

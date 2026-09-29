@@ -41,6 +41,15 @@ part that stops the next person from cheerfully undoing it.
 > it is that the band deliberately reaches up over the menu bar, where the
 > pointer actually ends up.
 >
+> **⌥Tab goes through windows since 2026-09-29**: one stop per window where
+> ⌘Tab has one per application, so two windows of the same app are finally two
+> places to go. The write-up is under §7, just before Stage 5. The part worth
+> knowing before touching it is that it holds the only private symbol in the
+> app, `_AXUIElementGetWindow`, looked up at run time so that losing it costs
+> this feature and nothing else — and that it can show a picture of the chosen
+> window, the one thing in Zonas that uses Screen Recording, asked for only
+> from the menu.
+>
 > **The first-launch window landed on 2026-08-05**, which closes the gap that
 > sentence used to end on. It was Stage 2's last open piece and the one the plan
 > had called the highest leverage per day in the whole document since the
@@ -81,11 +90,15 @@ universal binary with `-u`.
 | `DockDisplay.swift` | Reading the Dock's screen out of its own window, and the synthetic walk that moves it. The switcher follows the Dock — §7's write-up says how long that took to establish. |
 | `Shortcuts.swift` | The keyboard: `Chord`, `Direction`, and the rule that decides which zone an arrow sends the front window to. Arithmetic only, which is what makes it testable. |
 | `ShortcutController.swift` | Registering those keys with the system through `RegisterEventHotKey`, and moving the window when one is pressed. §7's write-up says why not an event tap. |
+| `WindowSwitcher.swift` | ⌥Tab's decisions: which windows are on the list, in what order, and where a press lands. No system calls. |
+| `WindowSwitcherController.swift` | ⌥Tab wired to the system: the hot keys, reading every application's windows at once without waiting on a slow one, polling ⌥, and bringing the chosen window forward. |
+| `WindowSwitcherPanel.swift` | The strip ⌥Tab draws — icons, where each window is, the chosen one's title and, if allowed, its picture — in a panel that never takes the keyboard. |
+| `WindowPreviews.swift` | The pictures: ScreenCaptureKit, only with Screen Recording granted, and the only place Zonas asks for it. |
 | `LaunchAtLogin.swift` | `SMAppService` registration. |
 | `Signature.swift` | Logs the live process's cdhash and designated requirement. |
 | `Log.swift` | File log at `~/Library/Logs/Zonas.log`. |
 | `AppDelegate.swift` | Menu bar, permissions, wiring. |
-| `Tests/ZonasTests/` | 326 tests. `swift test`, and CI runs it on every push. |
+| `Tests/ZonasTests/` | 369 tests. `swift test`, and CI runs it on every push. |
 
 ### The release pipeline, corrected
 
@@ -2016,6 +2029,263 @@ whose `AXFocusedUIElement` is the *control* with focus and needs the same
 right edge of a screen stays there, and the other screen's zones are a
 different `area` — and draw anything. The overlay is the drag's, and a keypress
 has nothing to preview because by the time it could, it has already happened.
+
+### Not in any stage — ⌥Tab goes through windows
+
+**Added 2026-09-29, asked for by name**, with a problem attached rather than a
+design: with several windows of the same application open — two Chrome
+windows, two Android Studio projects, two copies of Claude — ⌘Tab stops at the
+application and cannot reach the window. The answer on the table was to
+install AltTab. The question was whether Zonas could do it instead, and it is
+here for the same reason the other three are.
+
+**What it is.** Hold ⌥ and press Tab: a strip of every window appears, one icon
+each with the zone it is in underneath, and letting go of ⌥ brings the chosen
+one to the front. ⇧ goes back, ⌥Esc closes the strip with nothing moved, a
+click picks an icon, and — only if Screen Recording has been granted from the
+menu — a picture of the chosen window sits above the strip. It began as a
+list; "From a list to a strip" below says why it is not one any more. The first press chooses the *second* window,
+because the first is the one you are in, so a single tap goes back to where
+you were and a second tap comes back again. A tap never shows the list: it
+appears 130 ms after the press, and "When the list appears" below says where
+that number came from. `defaults.windowSwitcher` is `true` unless the file says `false`
+— on for a file that predates it, like the band and the arrows — and it is a
+boolean rather than a choice of keys, because there is no second combination
+that works: ⌘Tab is the system's, ⌃Tab is every browser's and terminal's, ⇧Tab
+is every form's.
+
+**The first question was whether it could be done at all**, and it was
+measured before any of it was written. macOS 14 made activation cooperative,
+and a background app bringing another app's window forward is exactly what
+that was aimed at. A `swiftc` probe with Finder in front and TextEdit holding
+four documents behind it, each time aiming at the document furthest back:
+
+| method | landed |
+|---|---|
+| raise, set main, `activate(options: [])` | 4 / 4 |
+| `activate`, then raise, set main | 4 / 4 |
+| raise, set main, `kAXFrontmostAttribute` | 4 / 4 |
+| `kAXFrontmostAttribute`, then raise, set main | 4 / 4 |
+
+all within 30 ms. The one miss was before that table, on the very first
+attempt: the first method, and a different application ended up in front. It
+did not happen again and was never explained, which is why `AXWindow.bringForward`
+is followed by a readback and a second way of asking. Then from Zonas itself —
+the debug binary, and a Developer-ID bundle launched with `open`, as Rule 12
+requires: Finder and TextEdit six times out of six, Microsoft Teams' two
+windows four times out of four plus two more reached through the list, a
+minimized TextEdit document brought back from the Dock, and every readback
+said "in front" at the first time of asking.
+
+**The order comes from one place and the handle from another, and joining
+them is the one private symbol in Zonas.** The WindowServer's list,
+`CGWindowListCopyWindowInfo`, is the only thing that knows how Chrome's windows
+sit among Teams' — and front to back is the order they were last used in,
+which is the order ⌥Tab has to walk. The Accessibility API is the only thing
+that can raise a window. The window number is the only thing both of them
+know, and `_AXUIElementGetWindow` is how every window manager that needs the
+two to meet gets it — yabai, Hammerspoon and AltTab among them. The public
+alternative was to match on the frame, and in this app in particular it is
+wrong: two windows snapped into the same zone have the same frame, to the
+point, and they are the pair most likely to be switched between.
+
+It is looked up with `dlsym` and not linked. Linked, a macOS that stopped
+exporting it would refuse to launch Zonas at all; looked up, it costs ⌥Tab and
+nothing else, and the log says so. Nothing else in the app touches it.
+
+**Letting go of ⌥ is polled, not heard**, and that is the decision in this
+feature. A hot key says when a combination goes down and never when a key
+comes up. The drag's tap hears modifiers and was the other candidate; it lost
+twice. The editor suspends it, so a list opened with the editor up could never
+be closed by a release. And its events and the hot key's arrive by different
+routes with nothing that orders them, so the release that ends a quick tap
+could be heard before the press that opened it. So the modifier state is asked
+for directly, when the press arrives and sixty times a second while the list is
+up, and nothing is asked once the list closes. It reads the four modifiers and
+nothing else, and ⌥Esc is registered only while the list is up, so Zonas still
+hears nothing anybody types — the promise `ShortcutController` makes.
+
+The question asked when the press arrives earned its place during testing, if
+not for the reason it was written for: three quick taps were over before the
+list had finished being read — they are the three slow reads below — and it
+found ⌥ already up and committed straight away, logging "1 press in 0 ms" (the
+log counted from the end of the read then; it counts from the press now). The
+window that came up was the right one all three times.
+
+**From a list to a strip.** The first version was a list — one row per window,
+the title on the left and the application's name on the right — and the verdict
+from the desk was that it was ugly. Seen, it read like a settings table: two
+columns with nothing between them, the application's name twice on most rows,
+a saturated selection, and the two rows for two Claude windows identical, which
+is the case the whole feature exists for. It is now the shape ⌘Tab taught
+everybody: a strip of icons, the chosen window's title under it. What tells two
+windows of one application apart is the label under each icon — **the zone the
+window is in**, which only Zonas knows: "Centro" and "Izquierda Arriba" where
+the list had "Claude" and "Claude". `WindowSwitcher.place` decides it, and it
+asks whether the window *fills* a zone rather than whether its middle is over
+one: a floating Finder window over the middle column is not "in Centro". A
+window in no zone shows its title instead — five "Floating" labels in a row, as
+the first strip had, told five windows apart not at all. The application's
+signature comes off the end of every title ("Opciones Mixamo", not "Opciones
+Mixamo - Google Chrome"), because the icon already says it.
+
+**The pointer chooses too, and the choice is ringed on the desktop.** Asked for
+from the desk once the strip existed. Moving the pointer onto an icon makes it
+the choice exactly as Tab would — letting go of ⌥ takes it — but only a pointer
+that *moves*: one resting where the strip happens to appear chose nothing, and
+taking it as a choice would change what somebody pressing Tab is looking at for
+no reason they can see. The icons listen with `.activeAlways` tracking areas,
+because the panel is never key and Zonas is never active. And whatever is
+chosen, by either, is ringed where it actually is — a click-through window one
+level under the strip, the accent colour around the window's frame — which is
+how a window behind three others, or on the other screen, is found by looking,
+and which needs no permission at all. Measured in the harness: the ring landed
+at the chosen window's frame, 5 points outside it on every side, at level 100
+under the strip's 101.
+
+**⌥Q closes the chosen window**, asked for by name, and the strip stays open so
+several can go before ⌥ comes up. It is the close button being pressed through
+Accessibility — not a quit, not a kill — so closing means what it means to the
+application. It is taken only while the strip is up, like ⌥Esc (⌥Q is "œ" on a
+US keyboard), and only once the strip is on screen: during the 130 ms wait the
+choice is one nobody has looked at. The strip changes only when the window has
+actually gone, and **one look was not enough to know**: TextEdit took a
+document with text in it down 528 ms after the press, where an empty one went
+in 262, so a single check at 250 ms reported a closing window as open and
+would have left it on the strip after it was gone. It is asked every 250 ms for
+up to two seconds instead; still there by then, it is waiting on a question,
+and the log says so. The choice falls on the window that took the closed one's
+place — `Cycle.removing`, tested.
+
+**A picture, on request.** The list had no picture of the windows on purpose: it
+needs Screen Recording, the permission the editor already turned down, and
+testing proved the point from the other side — one screenshot taken from the
+shell put up macOS's own dialog asking whether the app the shell runs in may
+"bypass the system private window picker". Then a picture was asked for by
+name. So it is there, and opt-in: `WindowPreviews.isAllowed` only ever looks,
+and the one request is the menu's `Show Window Previews…`. Without it the strip
+is the whole feature; with it, the chosen window's picture sits above, taken
+with ScreenCaptureKit while the strip is open, kept in memory while the window
+is, and written nowhere. Listing what can be captured cost 52 to 62 ms here —
+324 windows — and a capture about 40 (100 the first time in a process), so the
+last list is reused and only a window opened since waits for a fresh one; the
+list is also fetched at launch, which captures nothing. The last picture of
+each window is shown at once the next time it is chosen, while a fresh one is
+taken. Titles still come from Accessibility, and `kCGWindowName` is never read
+(Rule 12).
+
+**Which windows.** Everything on screen at layer 0 and visible, in the
+WindowServer's order; then minimized windows and hidden applications' windows,
+marked as such, in the order they were read. A window that is neither is on
+another Space and is left off — bringing it forward slides the whole desktop,
+which is a different gesture — and so is anything that is neither a standard
+window nor titled. The last rule is for the Android emulator's floating
+toolbar, a 54 × 506 untitled `AXDialog` that would otherwise be a stop on every
+press, and it is deliberately not `AXWindow.refusal`: refusing a window the
+drag could move is the failure Stage 4 exists to prevent, while leaving a
+window off this list costs one trip through ⌘Tab. What is left out and on
+screen is named in the log on every press; the first version also named
+Finder's desktop every time, which Accessibility lists as a window with no
+subrole, title or number, and which nobody has ever looked for.
+
+**Reading every application at once.** Ten applications, one after the other,
+took 17 ms, and the first time a process speaks to each application costs 12
+to 33 ms, so the first read in a fresh process took 237 ms that way. In
+parallel: 7 to 23 ms in the app once warm, 58 to 68 ms for the first press
+after launch. Three of the 32 reads during testing took 257 and 258 ms — one
+application reaching the 250 ms messaging timeout — and it could not be caught
+again: 200 rounds over eleven applications found nothing over 100 ms, and reads
+timed to land just after an activation found nothing over 56. So the session
+line was made to name any application that took more than 100 ms, and the
+first time it ran it named Microsoft Word, at 178 ms on a first contact.
+
+**Then it named Blender, and that changed the design.** Four presses out of
+four while Blender was starting took 250 ms to read — three of them
+somebody's own, on the installed build, and they are what "there is a small
+delay" was describing. Read in parallel, the list still took as long as its
+slowest application, so one application that is not answering — starting,
+quitting, or stuck — held every press up for the whole timeout. Now no
+application is waited for longer than 80 ms. One that is late contributes what
+it said the last time it answered, and its answer, when it arrives, is kept for
+the next press; one that has never answered is left off, and the log names
+both kinds. The memory cannot bring a closed window back: what is on screen is
+still decided by the WindowServer's list, which is always current, and a
+remembered window that is not on it counts only if it was minimized or hidden.
+A stuck application is also asked one question at a time — its thread can be
+held for a quarter of a second per attribute, and asking again on every press
+would pile a thread per press up behind it. Measured with TextEdit frozen by
+`SIGSTOP`: "17 windows in 87 ms — not waited for: TextEdit, as it last
+answered", and the list on screen at 132 ms.
+
+**When the list appears.** It used to wait 150 ms counted from the end of the
+read, which put the read in front of the wait and the drawing — about 30 ms of
+icons and rows — after it: about 210 ms from the press on every press, and
+about 410 ms on the first one after launch, when every application was being
+spoken to for the first time and the panel was being made. Three changes took
+it to 130 ms, and all three were measured on the release build. The wait is
+counted from the press, so the read happens inside it. The list is prepared out
+of sight while it runs and only ordered onto the screen at the end, after
+asking once more whether ⌥ is still down — the poll can be a sixtieth of a
+second behind, and a tap that ended in that gap would flash the list the wait
+exists to prevent. And two seconds after launch every application is read and
+the list drawn once, out of sight, which took 143 ms in the background; the
+first press after launch then showed its list at 136 ms, and the next two at
+135.
+
+130 is not a round number with a reason behind it. It is the two quick taps in
+the log from the desk this was tuned at, which let go of ⌥ about 107 and 125 ms
+after the press, plus a little. It keeps both of them from ever showing the
+list, with little to spare, and it is the one number to raise if somebody's
+taps are slower than that.
+
+**How it was measured, and the two ways the measuring went wrong.** The keys
+come from a separate `swiftc` program posting ⌥ as a `flagsChanged` and Tab as
+key events at the HID tap, because a hot key never fires for events its own
+process posts; the result is read back off the WindowServer's list and the
+application's focused window. Two things about that harness are worth knowing
+before trusting a failure it reports. **A synthetic hold of ⌥ does not survive
+somebody using the machine**: the modifier state follows real input, so a
+session that the script was still holding open committed 39 ms in, while the
+keyboard and mouse at the desk were in use. Two earlier readings found no list
+on screen with the session still open, and are **not explained**: seven more
+tries, including the same sequence straight after a rebuild, all found it
+where it belonged, with its rows laid out. With somebody working at the desk at
+the same time they are not evidence either way, and the line that now says
+when the list is drawn is there for the next time. And **a screenshot from the shell asks for Screen
+Recording on behalf of the app the shell runs in**, which on this machine put
+up a system dialog in front of everything mid-test; the panel's geometry was
+read from the WindowServer's list and its rows from the Accessibility tree
+instead, which is also a better instrument than a picture. The list says when
+it is drawn and on which screen, for the same reason the drag says when the
+zones are.
+
+**The strip was designed from a preview harness, which has two traps of its
+own.** The harness compiles every source file but `main.swift` against a
+`main` of its own, asks the controller's own `read` and `rows` for the windows
+actually open, shows the real panel for a second and captures it — so what was
+judged is what ships, without posting a key or moving anybody's window. First
+trap: **a capture of the panel's window alone, `screencapture -l`, has nothing
+behind its material**, and the dark panel came out mid-grey: luminance 0.30,
+3:1 against its white text. Captured with the screen behind it, `-R`, the same
+panel measured 0.06 — 10:1. Judge the material only with what is behind it.
+Second trap: **a locked screen blinds every window read.** While the session is
+locked, Accessibility answers each window's title with its application's name
+and `_AXUIElementGetWindow` fails for all of them, so the read finds nothing —
+the harness, and the installed app's warm-up, both read 0 windows, and it looked
+exactly like a regression until `CGSSessionScreenIsLocked` said 1 and the idle
+time said nobody had touched the machine for nineteen minutes.
+
+**Found on the way: the two hot key handlers could steal each other's keys.**
+Carbon offers every hot key to each handler on the application in turn until
+one says it dealt with it, and both number their keys from 1. `ShortcutController`
+answered `noErr` for everything, so ⌥Tab reaching it first would have been read
+as its own number 1, ⌃⌥←. Both handlers now check their signature and pass on
+what is not theirs. ⌃⌥Z was measured working with both installed.
+
+**What it does not do**: reach other Spaces, show full-screen applications
+that are not the one on screen, or remember anything between two presses of
+⌥Tab beyond an application's last answer, for the press it is late for, and
+each open window's last picture, for while a fresh one is taken.
 
 ### Stage 5 — The visual editor · 12 days
 

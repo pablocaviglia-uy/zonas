@@ -259,6 +259,60 @@ needs no permission beyond the Accessibility one Zonas already has. If another
 window manager holds one of the combinations, that key does nothing here and
 the log names it.
 
+### Every window, not every application
+
+⌘Tab stops at the application: with two Chrome windows, two Android Studio
+projects or two copies of anything open, it takes you to the app and leaves you
+to find the window. **⌥Tab goes through windows instead** — each one is a stop
+of its own.
+
+Hold ⌥ and press Tab: a strip of your windows appears, one icon per window, and
+each Tab moves along it. **Let go of ⌥** and the window you chose comes to the
+front. ⇧ with Tab goes back, Esc closes the strip without changing anything,
+moving the pointer over an icon chooses it, and clicking one goes there.
+
+**⌥Q closes the chosen window** — its close button is pressed, just as if you
+had clicked it — and the strip stays open, so you can close several before
+letting go of ⌥. A window that asks about unsaved changes stays on the strip
+until you answer it. ⌥Q is only taken while the strip is up; the rest of the
+time it is yours.
+
+**The chosen window is ringed where it actually is**, in your accent color, so
+a window behind three others or on the other screen can be found by looking.
+The ring follows the choice, whether Tab or the pointer moved it.
+
+**Under each icon is where that window is**: the name of the zone it fills —
+"Centro", "Izquierda Arriba + Izquierda Abajo" for one spread across two, or
+"Whole Screen" — so two windows of the same application are told apart at a
+glance. A window that is in no zone shows its title instead. Under the strip,
+the chosen window's title, its application, where it is, and the screen, when
+that is not the one the strip is on. Minimized windows and hidden applications'
+windows come last, faded, and choosing one brings it back.
+
+The order is the order you last used them in, so **a single tap of ⌥Tab goes
+back to the window you were just in**, and a second tap brings you back again.
+A quick tap never shows the strip at all; held, it appears after 130 ms.
+
+What is on it: every window on the screens and Spaces you are looking at, all
+monitors included. What is not: windows on other Spaces — bringing one forward
+would slide the whole desktop sideways — and small toolbars and palettes that
+have no title.
+
+**A picture of the chosen window, if you want one.** `Show Window Previews…` in
+the menu asks macOS for the Screen Recording permission, which is what taking
+a picture of another application's window needs; once it is granted, the strip
+has a large picture of the chosen window above it. It is off until you choose
+it, because Screen Recording is a permission to think about: it lets an app see
+everything on your screen, and from macOS 15 macOS asks you to confirm it again
+every so often with a dialog about letting the app "bypass the system private
+window picker". Zonas takes a picture only while the strip is open, keeps it in
+memory while the window is open, and writes it nowhere. Without the permission
+nothing else changes.
+
+`defaults.windowSwitcher: false` leaves ⌥Tab to the application in front. The
+key itself cannot be changed: ⌘Tab is macOS's own, ⌃Tab changes tabs in every
+browser and terminal, and ⇧Tab moves backwards through every form.
+
 The menu bar item — a `rectangle.split.3x1` glyph, dimmed while the permission
 is missing — has:
 
@@ -266,6 +320,7 @@ is missing — has:
 |---|---|
 | `Drag a window with ⇧, let ⇧ go to place it — ⌃ covers several zones` | Reminder, not a button |
 | `⌃⌥ with an arrow moves the front window — ⌃⌥↩ fills the screen, ⌃⌥Z places it` | Also a reminder; hidden when the file turns the keys off |
+| `⌥Tab goes through every window, one at a time — ⇧ goes back` | The same, for the window switcher |
 | `Edit Zones…` | The visual editor — see below |
 | `Edit the File…` | Opens `zonas.json5` in your default editor |
 | `Reload Zones` (⌘R) | Re-reads the file after you edit it |
@@ -273,6 +328,7 @@ is missing — has:
 | `App Switcher Screen` | Which screen ⌘Tab opens on — see below |
 | `Launch at Login` | Only available from `/Applications` |
 | `Accessibility Permissions…` | Prompts and opens the Settings pane |
+| `Show Window Previews…` | Asks for Screen Recording, for ⌥Tab's picture of the chosen window; says `Window Previews Are On` once granted |
 | `Welcome to Zonas…` | The first-launch window again, whenever you want it |
 | `Quit Zonas` (⌘Q) | |
 
@@ -376,6 +432,7 @@ comma after the last item:
     span: "control",  // hold this too, to cover several zones at once
     maximise: 24,  // points of top edge that fill the whole screen; 0 is off
     shortcuts: "control+option",  // hold these and press an arrow to move the front window
+    windowSwitcher: true,  // ⌥Tab goes through windows, not applications
     gap: 8,  // points of air between two windows
     margin: 0,  // points between a window and the edge of the screen
   },

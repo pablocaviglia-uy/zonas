@@ -170,6 +170,15 @@ struct Layout: Equatable {
     /// to nothing on a Mac that is not already a window manager.
     var shortcuts: Chord? = .standard
 
+    /// Whether ⌥Tab goes through windows one at a time.
+    ///
+    /// On unless the file says `false`, for the reason `shortcuts` is. And not
+    /// a choice of keys, unlike `shortcuts`, because there is no second
+    /// combination that works: ⌘Tab is macOS's own, ⌃Tab changes tabs in
+    /// every browser and terminal, and ⇧Tab moves backwards through every
+    /// form on the machine.
+    var windowSwitcher = true
+
     /// Bundle identifiers of applications Zonas keeps its hands off.
     ///
     /// A `Set` and not an array, because the only question ever asked of it is

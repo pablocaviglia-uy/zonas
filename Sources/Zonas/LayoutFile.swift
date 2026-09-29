@@ -84,6 +84,11 @@ enum LayoutFile {
         // a window depends only on where the window is — the same key from the
         // same place always does the same thing. false turns them off.
         shortcuts: "control+option",
+        // ⌥Tab goes through your windows one at a time, where ⌘Tab goes
+        // through applications: two Chrome windows are two stops, not one.
+        // Hold ⌥ to see the list, press Tab to move down it, let go of ⌥ to
+        // bring the one you chose to the front. false leaves ⌥Tab alone.
+        windowSwitcher: true,
         gap: 8,  // points of air between two windows
         margin: 0,  // points between a window and the edge of the screen
       },
