@@ -94,14 +94,26 @@ final class ShortcutController {
             InstallEventHandler(
                 GetApplicationEventTarget(),
                 { _, event, context in
-                    guard let context, let event else { return noErr }
+                    guard let context, let event else { return OSStatus(eventNotHandledErr) }
                     var id = EventHotKeyID()
                     GetEventParameter(event, EventParamName(kEventParamDirectObject),
                                       EventParamType(typeEventHotKeyID), nil,
                                       MemoryLayout<EventHotKeyID>.size, nil, &id)
+                    // Every hot key the app registers is offered to each
+                    // handler on the application in turn, until one answers
+                    // that it dealt with it — and ⌥Tab's keys are numbered from
+                    // 1 as well. Without the signature, ⌥Tab reaching this
+                    // handler first is this file's 1, which is ⌃⌥←: the front
+                    // window would move a zone to the left instead of the
+                    // switcher opening. Answering "not mine" is what passes a
+                    // press on to the handler that owns it.
+                    guard id.signature == ShortcutController.signature,
+                          let action = Action(rawValue: Int(id.id)) else {
+                        return OSStatus(eventNotHandledErr)
+                    }
                     let controller = Unmanaged<ShortcutController>.fromOpaque(context)
                         .takeUnretainedValue()
-                    if let action = Action(rawValue: Int(id.id)) { controller.perform(action) }
+                    controller.perform(action)
                     return noErr
                 },
                 1, &spec,
