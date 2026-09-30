@@ -279,7 +279,10 @@ time it is yours.
 
 **The chosen window is ringed where it actually is**, in your accent color, so
 a window behind three others or on the other screen can be found by looking.
-The ring follows the choice, whether Tab or the pointer moved it.
+The ring follows the choice, whether Tab or the pointer moved it. With previews
+on — below — the picture of that window is inside the ring, dimmed: the window
+you are about to get, in the place you are about to get it, instead of three
+other applications' pixels inside a blue rectangle.
 
 **Under each icon is where that window is**: the name of the zone it fills —
 "Centro", "Izquierda Arriba + Izquierda Abajo" for one spread across two, or
@@ -307,7 +310,10 @@ everything on your screen, and from macOS 15 macOS asks you to confirm it again
 every so often with a dialog about letting the app "bypass the system private
 window picker". Zonas takes a picture only while the strip is open, keeps it in
 memory while the window is open, and writes it nowhere. Without the permission
-nothing else changes.
+nothing else changes — the strip, the labels and the ring are all still there.
+
+The same picture is what goes inside the ring out on the desktop, so turning
+previews on changes two things at once and costs one capture either way.
 
 `defaults.windowSwitcher: false` leaves ⌥Tab to the application in front. The
 key itself cannot be changed: ⌘Tab is macOS's own, ⌃Tab changes tabs in every

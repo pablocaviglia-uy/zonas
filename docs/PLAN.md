@@ -2141,7 +2141,8 @@ level under the strip, the accent colour around the window's frame — which is
 how a window behind three others, or on the other screen, is found by looking,
 and which needs no permission at all. Measured in the harness: the ring landed
 at the chosen window's frame, 5 points outside it on every side, at level 100
-under the strip's 101.
+under the strip's 101. What goes *inside* the ring came later and does need one
+— "The ring says where, and now it says what" below.
 
 **⌥Q closes the chosen window**, asked for by name, and the strip stays open so
 several can go before ⌥ comes up. It is the close button being pressed through
@@ -2173,6 +2174,50 @@ list is also fetched at launch, which captures nothing. The last picture of
 each window is shown at once the next time it is chosen, while a fresh one is
 taken. Titles still come from Accessibility, and `kCGWindowName` is never read
 (Rule 12).
+
+**The ring says where, and now it says what.** Added 2026-09-30, from the desk:
+the ring is useful and it is in the wrong place to read — the picture is up in
+the strip, so every press means looking at the strip, then looking across the
+screen at the rectangle, and joining the two. The complaint is exactly what the
+ring cannot do on its own: around a covered window it frames three *other*
+applications' pixels, so it says where to look and shows you somebody else's
+window. The picture now goes inside it, dimmed, on the window's own rectangle.
+
+**It is the strip's picture, not a second one.** `ringChoice` reads the same
+cache `showPreview` fills, so a machine without Screen Recording rings exactly
+as it did, one with it captures no more than before, and the ring cannot show a
+different window from the strip's. What that costs is sharpness: the strip asks
+for a picture 480 to 720 points wide, and the ring puts it on a window that is
+1276 or 1728, so it is blown up 2.4 to 3.6 times. Judged at 1:1 in the harness
+it is soft and every label in it is legible, which is what identifying a window
+asks for; `previewWidth` is the one number to raise if somebody wants it crisp,
+and it costs the square of itself in memory per window.
+
+**The ground under it is opaque, and that is the whole of the drawing.** The
+obvious version is the picture at some alpha over the ring's tint, and the case
+the ring exists for is the case where that looks worst: the pixels underneath
+belong to the windows covering the one being pointed at, so a translucent ghost
+reads as both at once. Measured — the same ring drawn on a ground of 0.92
+against one of 1.0, over two Claude windows — the window behind came through at
+up to **175 of 255 levels**, on 0.9% of the pixels: its white text, which is the
+only part of it anybody reads. The mean difference was 2 levels, which is why a
+mean was not what settled it. Opaque, the ghost is clean; and because the ring
+is 5 points outside the window and the picture goes on the window's own
+rectangle, it lands exactly over it — captured over an *uncovered* window there
+is no doubling at any edge.
+
+**Faded, at 0.78, with the accent wash cut from 0.12 to 0.08.** Dimmer than the
+window and tinted, so nobody reads the ghost as the window having already come
+forward; the brightness jump when ⌥ comes up and the real one arrives is the
+feedback that it did. The wash had to come down because 0.12 over a picture
+tinted the whole thing blue rather than marking it.
+
+**What it does not do.** There is no picture for the first 150 to 220 ms a
+window is chosen for the first time in a session — the ring is as it always was
+until the capture lands — and none at all for a minimized or hidden window,
+which is nowhere to ring in the first place. Tabbing forwards usually has one
+already: the capture of the *next* window was already being taken ahead for the
+strip, and the ring is now the second thing that pays for.
 
 **Which windows.** Everything on screen at layer 0 and visible, in the
 WindowServer's order; then minimized windows and hidden applications' windows,

@@ -298,11 +298,19 @@ enum WindowSwitcher {
         return Strip(cell: cell, visible: min(count, max(1, Int(room / cell))))
     }
 
-    /// A window's size scaled to fit a box, keeping its shape, and never
-    /// enlarged: a picture blown up past the window's own size is a blur.
-    static func fit(_ size: CGSize, into box: CGSize) -> CGSize {
+    /// A window's size scaled to fit a box, keeping its shape.
+    ///
+    /// **Not enlarged, unless asked.** In the strip a picture blown up past its
+    /// own size is a blur in a panel that had room for it at its proper size,
+    /// so the default refuses. The ring is the other case: the picture goes on
+    /// the window's own rectangle wherever that is on the desktop, because
+    /// landing anywhere else — or at any other size — is a ghost of a window
+    /// that is not the one being pointed at. It is blown up there, and what
+    /// that costs is measured in §7.
+    static func fit(_ size: CGSize, into box: CGSize, enlarging: Bool = false) -> CGSize {
         guard size.width > 0, size.height > 0 else { return .zero }
-        let scale = min(box.width / size.width, box.height / size.height, 1)
+        var scale = min(box.width / size.width, box.height / size.height)
+        if !enlarging { scale = min(scale, 1) }
         return CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
     }
 

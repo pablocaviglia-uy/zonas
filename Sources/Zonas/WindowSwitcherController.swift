@@ -472,13 +472,27 @@ final class WindowSwitcherController {
     /// Rings the chosen window where it is on the desktop — once the strip is
     /// on screen, and not for a window that is minimized or hidden, which is
     /// nowhere to ring.
+    ///
+    /// The picture that goes inside the ring is the one the strip is showing,
+    /// read out of the same cache and never captured for this. So the ring
+    /// costs nothing on a machine without Screen Recording, nothing extra on
+    /// one with it, and it cannot show a different window from the strip's.
     private func ringChoice() {
         guard let session, session.isRevealed else { return }
         if let bounds = session.entries[session.cycle.index].bounds {
-            highlight.show(bounds)
+            highlight.show(bounds, picture: pictureOfChoice(session))
         } else {
             highlight.hide()
         }
+    }
+
+    /// The picture of the chosen window, if there is one to have: `nil` for
+    /// every session on a machine that has not granted Screen Recording, and
+    /// for the moment before this window's first capture arrives.
+    private func pictureOfChoice(_ session: Session) -> NSImage? {
+        guard session.showsPreviews,
+              let id = session.entries[session.cycle.index].window.id else { return nil }
+        return previews.picture(of: id)
     }
 
     /// An icon clicked while the strip is up.
@@ -536,6 +550,11 @@ final class WindowSwitcherController {
                              fitting: panel.previewBox, scale: panel.scale) { [weak self] picture in
                 guard let self, self.session?.number == number else { return }
                 self.panel.showPreview(picture, forRow: position)
+                // Asked rather than told, and asked whichever row this picture
+                // is for: by the time a capture lands the choice may have moved
+                // on, and what the ring has to draw is whatever is chosen now —
+                // which `ringChoice` reads from the same cache this just filled.
+                self.ringChoice()
             }
         }
     }

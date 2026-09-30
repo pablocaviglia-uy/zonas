@@ -363,6 +363,25 @@ struct WindowSwitcherLabelTests {
         #expect(WindowSwitcher.fit(CGSize(width: 300, height: 200), into: box) == CGSize(width: 300, height: 200))
         #expect(WindowSwitcher.fit(.zero, into: box) == .zero)
     }
+
+    /// The ring is the other caller, and it wants the opposite: the picture
+    /// goes on the window's own rectangle out on the desktop, which is several
+    /// times the size the strip showed it at.
+    @Test("For the ring the same picture is blown up to the window's own size")
+    func fitEnlarged() {
+        let window = CGSize(width: 1276, height: 668)
+        let picture = CGSize(width: 480, height: 251)
+
+        #expect(WindowSwitcher.fit(picture, into: window, enlarging: true) == CGSize(width: 1276, height: 667))
+        #expect(WindowSwitcher.fit(picture, into: window) == picture)
+
+        // A picture taken a press ago, of a window that has been resized since:
+        // it keeps its own shape and is letterboxed, rather than being stretched
+        // into a rectangle that was never its own.
+        #expect(WindowSwitcher.fit(CGSize(width: 480, height: 480), into: window, enlarging: true)
+                == CGSize(width: 668, height: 668))
+        #expect(WindowSwitcher.fit(.zero, into: window, enlarging: true) == .zero)
+    }
 }
 
 @Suite("What stays chosen when ⌥Q closes a window")

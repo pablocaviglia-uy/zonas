@@ -344,18 +344,33 @@ private final class SwitcherCellView: NSView {
     override func mouseMoved(with event: NSEvent) { onPoint?() }
 }
 
-/// A ring around the chosen window, where it actually is on the desktop.
+/// A ring around the chosen window, where it actually is on the desktop, with
+/// the picture of that window inside it when there is one.
 ///
 /// The strip says which window; this says where. A window behind three others,
 /// or on the other screen, is found by looking rather than by reading its
-/// zone's name — and it needs no permission, which a picture of the window does.
+/// zone's name — and **the ring itself needs no permission**, which is why it
+/// was built before the picture and why it is still the whole of this on a
+/// machine that never granted Screen Recording.
+///
+/// The picture is the association it could not make on its own: the ring around
+/// a covered window frames three other applications' pixels, so it says where
+/// to look without saying what is there, and the answer had to be read off the
+/// strip and carried across the screen. Dropped into the ring, the two are one
+/// glance. `RingView` is where the drawing of it is argued.
 final class WindowHighlight {
 
     private var window: NSWindow?
+    private let ring = RingView()
 
-    /// Rings a window, given its frame in CG coordinates.
-    func show(_ frame: CGRect) {
+    /// Rings a window, given its frame in CG coordinates, and puts `picture`
+    /// inside the ring — `nil` for no permission, or for the moment before the
+    /// first capture of this window has arrived.
+    func show(_ frame: CGRect, picture: NSImage? = nil) {
         let window = self.window ?? make()
+        // Before the frame, so that a redraw the move asks for is one that
+        // already has the picture in it.
+        ring.picture = picture
         // Just outside the window, so the ring does not cover its edge.
         window.setFrame(Coords.cgToCocoa(frame).insetBy(dx: -5, dy: -5), display: true)
         window.orderFrontRegardless()
@@ -363,6 +378,10 @@ final class WindowHighlight {
 
     func hide() {
         window?.orderOut(nil)
+        // Or the next window ringed with no picture of its own — a different
+        // application, as often as not — appears inside the last one's for as
+        // long as it takes the first capture to arrive.
+        ring.picture = nil
     }
 
     private func make() -> NSWindow {
@@ -377,20 +396,76 @@ final class WindowHighlight {
         // that one can be anywhere in the stack.
         window.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue - 1)
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        window.contentView = RingView()
+        window.contentView = ring
         self.window = window
         return window
     }
 }
 
+/// The ring, and the picture of the window inside it.
 private final class RingView: NSView {
+
+    /// How much of the picture is let through, over the black it is drawn on.
+    ///
+    /// Dimmer than the window itself, and washed with the accent colour, so
+    /// that the ghost is never read as the window having already come forward.
+    /// The jump in brightness when ⌥ comes up and the real one arrives is what
+    /// says that it has.
+    private static let fade: CGFloat = 0.78
+
+    /// The picture of the window this ring is around.
+    var picture: NSImage? {
+        didSet {
+            guard picture !== oldValue else { return }
+            needsDisplay = true
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 2.5, dy: 2.5), xRadius: 14, yRadius: 14)
-        NSColor.controlAccentColor.withAlphaComponent(0.12).setFill()
+        if let picture { drawGhost(picture, in: ring) }
+        // Over the picture, and lighter when there is one: the wash is what
+        // keeps a ringed window the accent colour rather than just a dimmed
+        // one, and at 0.12 over a picture it tinted the whole thing blue.
+        NSColor.controlAccentColor.withAlphaComponent(picture == nil ? 0.12 : 0.08).setFill()
         ring.fill()
         NSColor.controlAccentColor.setStroke()
         ring.lineWidth = 5
         ring.stroke()
+    }
+
+    /// The picture, faded, exactly over where the window is.
+    ///
+    /// `bounds` is the window's frame grown by 5 points on every side — the
+    /// ring sits outside the window, so the picture goes back in the middle of
+    /// it, at the size the window itself has. That it lands on the window's own
+    /// rectangle rather than filling the ring is the whole of the association:
+    /// what you see is the shape you are about to get, in the place you are
+    /// about to get it.
+    ///
+    /// `fit` and not the rectangle itself, because the picture can be a press
+    /// or two old and a window resized since would otherwise be stretched.
+    private func drawGhost(_ picture: NSImage, in ring: NSBezierPath) {
+        NSGraphicsContext.saveGraphicsState()
+        ring.addClip()
+        // **Opaque, and that is the measurement in this view.** The obvious
+        // version is the picture at some alpha straight over what is already
+        // there, and the case this ring exists for is the case where that is
+        // worst: the pixels underneath belong to the windows *covering* the one
+        // being pointed at, so a translucent ghost reads as two windows at once.
+        // Drawn on a ground of 0.92 instead of this one, over two Claude
+        // windows, the one behind came through at up to 175 of 255 levels — its
+        // white text, the only part of it anybody reads. The mean difference
+        // over the whole ring was 2 levels, which is why a mean is not what
+        // settled it.
+        NSColor.black.setFill()
+        ring.fill()
+        let room = bounds.insetBy(dx: 5, dy: 5).size
+        let size = WindowSwitcher.fit(picture.size, into: room, enlarging: true)
+        picture.draw(in: NSRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,
+                               width: size.width, height: size.height),
+                     from: .zero, operation: .sourceOver, fraction: RingView.fade)
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 
