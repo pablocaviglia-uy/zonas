@@ -9,6 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var shortcutHintItem: NSMenuItem?
     private var windowsHintItem: NSMenuItem?
     private var previewsItem: NSMenuItem?
+    private var ringItem: NSMenuItem?
+    private var windowSwitcherItem: NSMenuItem?
+    private var permissionsItem: NSMenuItem?
     private let shortcuts = ShortcutController()
     private let windowSwitcher = WindowSwitcherController()
     private var problemItem: NSMenuItem?
@@ -531,6 +534,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(problem)
 
         menu.addItem(.separator())
+
+        // **What follows is grouped by what each item is about, and that is the
+        // whole of the reorganisation.** It had grown to eleven things to click
+        // in two groups whose rule was the order they had been written in: a
+        // setting of one feature, a system preference, two permissions and a
+        // help window in a row, with the two switchers — the system's ⌘Tab and
+        // Zonas' own ⌥Tab — sitting four items apart under names that did not
+        // say which was which. Reported from the desk as hard to tell what can
+        // be done from here, which is the only thing this menu is for.
+        //
+        // The groups are now: your zones, the two switchers, and the app
+        // itself. Nothing moved into a submenu that somebody reaches for often
+        // — the editor and the file stay one click away — and the submenus hold
+        // exactly the settings of the feature they are named after.
         menu.addItem(ownItem("Edit Zones…", #selector(openEditor)))
         // This used to be the item called "Edit Zones…", and the rename is the
         // point: with a visual editor in the menu next to it, an item that opens
@@ -538,32 +555,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // surprise and the other half never find the file.
         menu.addItem(ownItem("Edit the File…", #selector(openLayout)))
         menu.addItem(ownItem("Reload Zones", #selector(reloadLayout), key: "r"))
-        menu.addItem(ownItem("Open Log…", #selector(openLog)))
         menu.addItem(.separator())
+
+        // The keys are in the title because the two switchers are told apart by
+        // the key and by nothing else: one is macOS', one is this app's, and
+        // "App Switcher Screen" next to "Show Window Previews…" left the reader
+        // to work out that the first was about ⌘Tab and the second about ⌥Tab.
+        let ourSwitcher = NSMenuItem(title: "Window Switcher (⌥Tab)", action: nil, keyEquivalent: "")
+        let windowChoices = NSMenu()
+        ourSwitcher.submenu = windowChoices
+        windowSwitcherItem = ourSwitcher
+        menu.addItem(ourSwitcher)
+
+        // The only place Zonas ever asks for Screen Recording. ⌥Tab works
+        // without it; this adds the picture of the chosen window. Once it is
+        // granted the item stops being a request and becomes the switch — see
+        // `menuNeedsUpdate`, and `WindowPreviews` for why there is one at all.
+        let previews = ownItem("Show Window Previews…", #selector(showWindowPreviews))
+        previewsItem = previews
+        windowChoices.addItem(previews)
+        let ring = ownItem("Picture in the Ring", #selector(togglePreviewInRing))
+        ringItem = ring
+        windowChoices.addItem(ring)
 
         // A submenu and not a row of items, because the list is however many
         // monitors are plugged in and it changes while the app is running.
-        let switcher = NSMenuItem(title: "App Switcher Screen", action: nil, keyEquivalent: "")
+        let switcher = NSMenuItem(title: "App Switcher (⌘Tab)", action: nil, keyEquivalent: "")
         let switcherChoices = NSMenu()
         switcher.submenu = switcherChoices
         switcherMenu = switcherChoices
         menu.addItem(switcher)
+        menu.addItem(.separator())
 
         let launchItem = ownItem("Launch at Login", #selector(toggleLaunchAtLogin))
         launchItem.state = LaunchAtLogin.isEnabled ? .on : .off
         launchAtLoginItem = launchItem
         menu.addItem(launchItem)
 
-        menu.addItem(ownItem("Accessibility Permissions…", #selector(openPermissions)))
-        // The only place Zonas ever asks for Screen Recording. ⌥Tab works
-        // without it; this adds the picture of the chosen window.
-        let previews = ownItem("Show Window Previews…", #selector(showWindowPreviews))
-        previewsItem = previews
-        menu.addItem(previews)
+        // Hidden once there is nothing to ask for — see `menuNeedsUpdate`. It
+        // is the item somebody needs exactly once and reads past for years.
+        let permissions = ownItem("Accessibility Permissions…", #selector(openPermissions))
+        permissionsItem = permissions
+        menu.addItem(permissions)
         // The welcome window opens itself once and then never again, which is
         // right — and would strand the person who closed it before reading it,
         // which is not. One line buys the way back.
         menu.addItem(ownItem("Welcome to Zonas…", #selector(openWelcome)))
+        // Down here with the app's own things rather than up with the zones: it
+        // is where you go when something did not work, not something you do to
+        // a layout.
+        menu.addItem(ownItem("Open Log…", #selector(openLog)))
         menu.addItem(.separator())
 
         // No target: the action has to travel up the responder chain to NSApp,
@@ -648,13 +689,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         shortcutHintItem?.title = shortcutHint
         shortcutHintItem?.isHidden = LayoutStore.shared.layout.shortcuts == nil
         windowsHintItem?.isHidden = !LayoutStore.shared.layout.windowSwitcher
-        // Asked every time the menu opens: the switch is in System Settings,
-        // and nothing tells Zonas when it is flipped. Once it is on, the item
-        // says so and does nothing — turning it off is Settings' job too.
-        previewsItem?.isHidden = !LayoutStore.shared.layout.windowSwitcher
-        let previewing = WindowPreviews.isAllowed
-        previewsItem?.title = previewing ? "Window Previews Are On" : "Show Window Previews…"
-        previewsItem?.action = previewing ? nil : #selector(showWindowPreviews)
+        // The whole submenu goes when the file turns ⌥Tab off: settings for a
+        // feature that is not running are a menu that lies about what it does.
+        windowSwitcherItem?.isHidden = !LayoutStore.shared.layout.windowSwitcher
+
+        // Asked every time the menu opens, because the permission is flipped in
+        // System Settings and nothing tells Zonas that it happened.
+        //
+        // **The item is a request until it is granted and a switch afterwards.**
+        // It used to become "Window Previews Are On" and do nothing, which is a
+        // dead end for anybody who wanted them off again: the way back was
+        // System Settings, for a feature this menu had asked for by name.
+        let allowed = WindowPreviews.isAllowed
+        let previewing = allowed && WindowPreviews.isOn()
+        previewsItem?.title = allowed ? "Window Previews" : "Show Window Previews…"
+        previewsItem?.action = allowed ? #selector(toggleWindowPreviews) : #selector(showWindowPreviews)
+        previewsItem?.state = previewing ? .on : .off
+        // Shown even with no permission and no previews, greyed by
+        // `validateMenuItem`: an item that disappears is a feature nobody knows
+        // is there, and this one is the answer to "why is my window covered by
+        // a picture of itself".
+        ringItem?.state = previewing && WindowPreviews.isInRing() ? .on : .off
+
+        // Gone once there is nothing to grant. The welcome window keeps the way
+        // back — it has the permission row, in all three of its states — and it
+        // is two items below this one.
+        permissionsItem?.isHidden = readiness.isWorking
         showProblem(LayoutStore.shared.problem)
         // The submenu has no delegate of its own on purpose: this fires before
         // the main menu is drawn, which is well before anybody has moved the
@@ -717,12 +777,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// touching it from there would leave the login item pointing at an ephemeral
     /// bundle.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        item === launchAtLoginItem ? LaunchAtLogin.isInstalledCopy : true
+        if item === launchAtLoginItem { return LaunchAtLogin.isInstalledCopy }
+        // Nothing to put in the ring while there are no pictures at all, and a
+        // checkbox that can be ticked with nothing to show for it is worse than
+        // one that is visibly not available yet.
+        if item === ringItem { return WindowPreviews.isAllowed && WindowPreviews.isOn() }
+        return true
     }
 
     @objc private func showWindowPreviews() {
         Log.write("windows: asking for Screen Recording, for ⌥Tab's previews")
         WindowPreviews.request()
+    }
+
+    /// Both switches are logged, for the reason every state change in this app
+    /// is: "⌥Tab stopped showing pictures" is otherwise a bug report with no
+    /// way of telling a permission that went away from a menu item somebody
+    /// clicked last week.
+    @objc private func toggleWindowPreviews() {
+        let on = !WindowPreviews.isOn()
+        WindowPreviews.setOn(on)
+        Log.write("windows: previews \(on ? "on" : "off") — from the menu")
+    }
+
+    @objc private func togglePreviewInRing() {
+        let on = !WindowPreviews.isInRing()
+        WindowPreviews.setInRing(on)
+        Log.write("windows: the picture in the ring is \(on ? "on" : "off") — from the menu")
     }
 
     @objc private func openPermissions() {

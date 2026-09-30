@@ -23,6 +23,46 @@ final class WindowPreviews {
 
     static var isAllowed: Bool { CGPreflightScreenCaptureAccess() }
 
+    // MARK: - What was asked for, which is not the same as what is allowed
+
+    /// `UserDefaults` and not the layout file: Rule 3. Whether this machine
+    /// draws pictures of windows is this machine's business — it is bounded by
+    /// a permission that belongs to this machine and to no other, and a layout
+    /// committed to a dotfiles repo has no business carrying it to a desk where
+    /// that permission was never granted.
+    ///
+    /// Both exist because the permission was the only switch there was. Once it
+    /// was granted the menu said "Window Previews Are On" and did nothing, so
+    /// the only way back was System Settings — for a feature Zonas had asked for
+    /// by name. These are the way back, and the second one is the one asked for
+    /// at the desk: the picture in the strip and the picture out on the window
+    /// are worth wanting separately.
+    static let onKey = "windowPreviews"
+    static let inRingKey = "windowPreviewInRing"
+
+    /// **`object(forKey:)` and not `bool(forKey:)`**, which answers `false` for
+    /// a key nobody has written and would turn previews off for everybody who
+    /// has never opened this menu — the one place where the absence of an
+    /// opinion and an opinion of "no" are not the same thing.
+    static func isOn(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: onKey) as? Bool ?? true
+    }
+
+    static func setOn(_ on: Bool, _ defaults: UserDefaults = .standard) {
+        defaults.set(on, forKey: onKey)
+    }
+
+    /// Whether the picture also goes inside the ring on the desktop. Off, ⌥Tab
+    /// is what it was before the ring learned to carry one: the strip keeps its
+    /// picture and the ring goes back to being an outline.
+    static func isInRing(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: inRingKey) as? Bool ?? true
+    }
+
+    static func setInRing(_ on: Bool, _ defaults: UserDefaults = .standard) {
+        defaults.set(on, forKey: inRingKey)
+    }
+
     /// Puts up macOS's own prompt the first time, and opens the Screen
     /// Recording pane of System Settings, which is where the switch is — and
     /// where it is every time after the first, when there is no prompt.

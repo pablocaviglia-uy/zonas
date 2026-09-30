@@ -313,7 +313,9 @@ memory while the window is open, and writes it nowhere. Without the permission
 nothing else changes — the strip, the labels and the ring are all still there.
 
 The same picture is what goes inside the ring out on the desktop, so turning
-previews on changes two things at once and costs one capture either way.
+previews on changes two things at once and costs one capture either way. Both
+have a switch in the menu, under `Window Switcher (⌥Tab)`: previews at all, and
+the picture in the ring.
 
 `defaults.windowSwitcher: false` leaves ⌥Tab to the application in front. The
 key itself cannot be changed: ⌘Tab is macOS's own, ⌃Tab changes tabs in every
@@ -324,19 +326,34 @@ is missing — has:
 
 | Item | |
 |---|---|
-| `Drag a window with ⇧, let ⇧ go to place it — ⌃ covers several zones` | Reminder, not a button |
+| `Drag a window with ⇧, let ⇧ go to place it — ⌃ covers several zones` | Reminder, not a button — and read from your file, so it says the keys you chose |
 | `⌃⌥ with an arrow moves the front window — ⌃⌥↩ fills the screen, ⌃⌥Z places it` | Also a reminder; hidden when the file turns the keys off |
 | `⌥Tab goes through every window, one at a time — ⇧ goes back` | The same, for the window switcher |
+| **Your zones** | |
 | `Edit Zones…` | The visual editor — see below |
 | `Edit the File…` | Opens `zonas.json5` in your default editor |
 | `Reload Zones` (⌘R) | Re-reads the file after you edit it |
-| `Open Log…` | Opens `~/Library/Logs/Zonas.log` |
-| `App Switcher Screen` | Which screen ⌘Tab opens on — see below |
+| **The two switchers** | |
+| `Window Switcher (⌥Tab)` ▸ | Zonas' own, and its two settings |
+| ⤷ `Show Window Previews…` | Asks for Screen Recording. Once granted it becomes **`Window Previews`**, a checkbox — so previews can be turned off again without going back to System Settings |
+| ⤷ `Picture in the Ring` | Whether the picture also goes inside the ring drawn around the chosen window. On by default; greyed out while there are no previews to put there |
+| `App Switcher (⌘Tab)` ▸ | macOS' own: which screen it opens on — see below |
+| **Zonas itself** | |
 | `Launch at Login` | Only available from `/Applications` |
-| `Accessibility Permissions…` | Prompts and opens the Settings pane |
-| `Show Window Previews…` | Asks for Screen Recording, for ⌥Tab's picture of the chosen window; says `Window Previews Are On` once granted |
+| `Accessibility Permissions…` | Prompts and opens the Settings pane. Hidden once the permission is granted and the app is working — the welcome window keeps the way back |
 | `Welcome to Zonas…` | The first-launch window again, whenever you want it |
+| `Open Log…` | Opens `~/Library/Logs/Zonas.log` |
 | `Quit Zonas` (⌘Q) | |
+
+The three bold rows are the separators between groups, not items. What goes
+where is decided by what each item is *about* — your zones, the switchers,
+the app — rather than by when it was added, which is what the menu used to be
+sorted by.
+
+Both checkboxes live in `UserDefaults`, not in your layout file: whether this
+machine draws pictures of windows is bounded by a permission that belongs to
+this machine, and a layout committed to a dotfiles repo has no business
+carrying it to a desk where that permission was never granted.
 
 ### Which screen ⌘Tab opens on
 

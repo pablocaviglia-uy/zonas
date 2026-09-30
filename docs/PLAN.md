@@ -2332,6 +2332,67 @@ that are not the one on screen, or remember anything between two presses of
 ⌥Tab beyond an application's last answer, for the press it is late for, and
 each open window's last picture, for while a fresh one is taken.
 
+### Not in any stage — the menu stopped saying what it was for
+
+**Reported from the desk, 2026-09-30**, in the same breath as asking for a
+switch for the ring's picture: the menu is overloaded and its options are
+jumbled, and it has become hard to tell what can be done from there — which is
+the only thing a menu bar item is for.
+
+It was true, and the cause is worth naming because every long-lived menu gets
+it: **the menu was sorted by the order things were built in.** Eleven items in
+two groups, and the second group was a setting of one feature, a system
+preference, two permissions and a help window in a row. Worst of all, the two
+switchers — macOS' ⌘Tab and Zonas' own ⌥Tab — sat four items apart under names
+("App Switcher Screen", "Show Window Previews…") that left the reader to work
+out which was about which.
+
+It is now sorted by **what each item is about**: your zones, the two switchers,
+and the app itself. Each switcher is one item with the key in its name and a
+submenu holding the settings of that feature and nothing else. Nothing that
+gets reached for often moved into a submenu — the editor and the file are still
+one click — and two items that had earned their place by being needed once
+stopped taking it forever: `Accessibility Permissions…` is hidden once the
+permission is granted and the tap is alive (the welcome window keeps the way
+back, with the same three states in it), and `Open Log…` moved down with the
+app's own things, because it is where you go when something did not work rather
+than something you do to a layout.
+
+**The three lines of instructions at the top stayed, and that was measured
+rather than argued.** They are the widest thing in the menu and the obvious
+thing to cut, so the candidates were laid out in the real menu font: the
+keyboard line is 499 points and the two either side of it are 416 and 387, and
+the menu is as wide as the widest of them. Trimming the other two buys *nothing
+at all*; trimming that one means spending "the screen" or ⌃⌥Z, which is the
+information the line exists to carry. And they are not documentation but
+**state**: they are read back from the file, so they are the one place in the
+app that says which keys it actually took. The welcome window is where they
+would go, and it covers the drag and spanning today and neither the keyboard
+nor ⌥Tab — teaching it those is the change that would let this block be cut,
+and it is a different change.
+
+**Two switches, and one of them was already missing.** The one asked for is the
+ring's picture. The other fell out of writing the submenu: once Screen
+Recording was granted, the menu said "Window Previews Are On" and did nothing,
+so the only way to turn previews off again was System Settings — for a feature
+Zonas had asked for by name. The item is now a request while the permission is
+missing and a checkbox afterwards, and the ring's is a second checkbox that
+greys out while there is nothing to put in the ring.
+
+Both live in `UserDefaults` and not in the layout file, which is Rule 3 and
+also the plainer argument: they are bounded by a permission that belongs to
+this machine, and a file whose whole claim is that it belongs in a dotfiles
+repo should not carry a switch that means nothing at the next desk. The trap
+in writing them is that `bool(forKey:)` answers `false` for a key nobody has
+written, which would have turned previews off for every machine that had never
+opened this menu; `object(forKey:) as? Bool ?? true` is the line, and the test
+that would have caught it is the first one in the suite.
+
+Driven through Accessibility to check it end to end rather than by reading the
+code: clicking `Window Previews` in the submenu logs the change, leaves the
+item unticked and leaves `Picture in the Ring` unticked *and disabled*, and
+clicking it again puts both back.
+
 ### Stage 5 — The visual editor · 12 days
 
 | Piece | Days |

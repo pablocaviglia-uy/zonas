@@ -84,8 +84,11 @@ final class WindowSwitcherController {
         /// Which session this is — see `sessions`.
         let number: Int
         /// Whether this one shows pictures of the windows, which is whether
-        /// Screen Recording was granted when it opened.
+        /// Screen Recording was granted when it opened **and** the menu has not
+        /// been used to turn them off.
         var showsPreviews = false
+        /// Whether the chosen window's picture also goes inside the ring.
+        var showsGhost = false
         /// Whether the strip is on screen yet. Until it is, nothing else is
         /// drawn either: a tap shows nothing at all.
         var isRevealed = false
@@ -407,9 +410,12 @@ final class WindowSwitcherController {
         session?.screen = screen
         // Asked, never requested: the request is the menu's. Asked on every
         // press rather than once, because the switch is flipped in System
-        // Settings, where nothing tells Zonas it happened.
-        let showsPreviews = WindowPreviews.isAllowed
+        // Settings, where nothing tells Zonas it happened — and the two in the
+        // menu are read here as well so that one session is one answer, rather
+        // than a session that could change its mind halfway through.
+        let showsPreviews = WindowPreviews.isAllowed && WindowPreviews.isOn()
         session?.showsPreviews = showsPreviews
+        session?.showsGhost = showsPreviews && WindowPreviews.isInRing()
         if showsPreviews {
             previews.begin(windows: Set(entries.compactMap(\.window.id)))
         }
@@ -490,7 +496,7 @@ final class WindowSwitcherController {
     /// every session on a machine that has not granted Screen Recording, and
     /// for the moment before this window's first capture arrives.
     private func pictureOfChoice(_ session: Session) -> NSImage? {
-        guard session.showsPreviews,
+        guard session.showsGhost,
               let id = session.entries[session.cycle.index].window.id else { return nil }
         return previews.picture(of: id)
     }

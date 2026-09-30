@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import Testing
 @testable import Zonas
 
@@ -419,5 +420,57 @@ struct WindowSwitcherCloseTests {
     @Test("A position that is not on the list changes nothing")
     func nothingThere() {
         #expect(cycle(3, at: 1).removing(7) == cycle(3, at: 1))
+    }
+}
+
+@Suite("The two switches for ⌥Tab's pictures")
+struct WindowPreviewSettingsTests {
+
+    /// A domain of its own, so a test run never writes into the real one and
+    /// the developer's own preference is not spent by `swift test`.
+    private func withDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
+        let name = "uy.com.fcstudio.zonas.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { UserDefaults.standard.removePersistentDomain(forName: name) }
+        try body(defaults)
+    }
+
+    /// The one that would go wrong silently: `bool(forKey:)` answers `false`
+    /// for a key nobody has written, which would turn both of these off for
+    /// everybody who has never opened the menu.
+    @Test("Never having said anything is not the same as having said no")
+    func onByDefault() {
+        withDefaults { defaults in
+            #expect(WindowPreviews.isOn(defaults))
+            #expect(WindowPreviews.isInRing(defaults))
+        }
+    }
+
+    @Test("Turning them off, and back on")
+    func switching() {
+        withDefaults { defaults in
+            WindowPreviews.setOn(false, defaults)
+            #expect(!WindowPreviews.isOn(defaults))
+            // The ring's own switch is untouched by the master: turning
+            // previews off and on again gives back the menu you left.
+            #expect(WindowPreviews.isInRing(defaults))
+
+            WindowPreviews.setInRing(false, defaults)
+            WindowPreviews.setOn(true, defaults)
+            #expect(WindowPreviews.isOn(defaults))
+            #expect(!WindowPreviews.isInRing(defaults))
+        }
+    }
+
+    /// They are two keys and not one enumeration, so that a version that
+    /// learns a third place to put a picture does not have to migrate anybody's
+    /// preference.
+    @Test("The two switches are independent")
+    func independent() {
+        withDefaults { defaults in
+            WindowPreviews.setInRing(false, defaults)
+            #expect(WindowPreviews.isOn(defaults))
+            #expect(!WindowPreviews.isInRing(defaults))
+        }
     }
 }
