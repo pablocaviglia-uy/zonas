@@ -284,6 +284,15 @@ on — below — the picture of that window is inside the ring, dimmed: the wind
 you are about to get, in the place you are about to get it, instead of three
 other applications' pixels inside a blue rectangle.
 
+**And the rest of the screen is pushed back while you choose.** Every other
+window goes under a wash of black, two faint lines run through each of the
+chosen window's edges out to the sides of the screen, and the ring carries a
+glow. The chosen window itself is not touched — it is the only thing that was
+never dimmed, which is what makes it the thing you see first. With twenty
+windows open that does more than a brighter ring can: a ring competes with
+whatever else is on the screen, and this removes the competition. Turn it off
+with `Dim the Other Windows` in the menu.
+
 **Under each icon is where that window is**: the name of the zone it fills —
 "Centro", "Izquierda Arriba + Izquierda Abajo" for one spread across two, or
 "Whole Screen" — so two windows of the same application are told apart at a
@@ -337,6 +346,7 @@ is missing — has:
 | `Window Switcher (⌥Tab)` ▸ | Zonas' own, and its two settings |
 | ⤷ `Show Window Previews…` | Asks for Screen Recording. Once granted it becomes **`Window Previews`**, a checkbox — so previews can be turned off again without going back to System Settings |
 | ⤷ `Picture in the Ring` | Whether the picture also goes inside the ring drawn around the chosen window. On by default; greyed out while there are no previews to put there |
+| ⤷ `Dim the Other Windows` | Whether choosing a window pushes the rest of the screen back behind a wash, with guides to the chosen window's edges. On by default, and needs no permission |
 | `App Switcher (⌘Tab)` ▸ | macOS' own: which screen it opens on — see below |
 | **Zonas itself** | |
 | `Launch at Login` | Only available from `/Applications` |

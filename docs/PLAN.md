@@ -2212,6 +2212,93 @@ forward; the brightness jump when ⌥ comes up and the real one arrives is the
 feedback that it did. The wash had to come down because 0.12 over a picture
 tinted the whole thing blue rather than marking it.
 
+**The rest of the screen goes back, which is the half the ring could not do.**
+Added 2026-09-30, from the desk, the same day and the same complaint one step
+on: with many windows open the ring says which window clearly enough and is
+still hard to *find*. Those are two things. A ring is bright next to however
+many other bright things are open, so a thicker stroke or a stronger wash fights
+the noise on the noise's terms and gets a little worse with every window opened.
+Dimming everything else is the only effect whose strength grows with the number
+of windows, because the number of windows is what it removes. Everything that is
+not the chosen window goes under black at 0.45, two lines run through each of
+its edges to the bezels, and the ring carries a glow.
+
+**The hole is a hole, and §5 is why it had to be.** The obvious version paints
+the screen dark and the chosen window lighter, and over a scrim a lighter fill
+is additive where the scrim is multiplicative — on a dark desktop, brighter than
+not dimming at all, which is the mistake the editor's first build shipped and
+the reason it still does not fill its zones. So the window is left alone and the
+black is drawn everywhere else, `evenOdd` cutting it out. Measured on the
+shipped drawing with no picture in the ring: **inside the ring the alpha is 0.12
+and the colour is the accent** — the wash the ring always had, no black at all —
+against **0.447** outside it. The chosen window is not made brighter; it is the
+only thing that was never made darker. At 0.45 the other windows stay
+recognisable, which the editor's 0.6 would not leave them: ⌥Tab is a choice
+*between* them, so a scrim that made them one dark rectangle would take away the
+thing being chosen from.
+
+**The ring stopped being a window the size of what it rings.** It was borderless
+at the chosen window's frame grown by five points, which is all a ring needs and
+leaves nowhere for a glow to go. Three of the four things drawn now are about
+the rest of the screen, so it is one window per display, keyed by `displayID`
+for the reason `OverlayController` documents. Verified with both monitors
+attached: 5120×1440 at the origin and 1728×1117 beside it, one highlight window
+each at `popUpMenu - 1`, the strip still above them both.
+
+**The guides are 2 points, and that is the pixel grid rather than taste.** A
+one-point line centred on a window edge at a whole coordinate spans 379.5 to
+380.5, so on the 1× ultrawide it lands half in each of two pixel columns and
+antialiasing halves it: scanned against the scrim it read alpha 0.546 where 0.64
+was asked for, which on a monitor that wide is the difference between a guide
+and a smudge. Two points centred on the same edge cover both columns outright.
+The same scan is what confirmed all four land where they belong — verticals at
+379…380 and 1199…1200, horizontals at 687…688 and 1279…1280.
+
+They run off the edges rather than reaching out from the corners as ticks,
+because a line that leaves the screen can be picked up anywhere along its length
+and a tick can only be found by already looking near the window — which is the
+thing you do not yet know how to do.
+
+**A guide is dropped for an edge that is on another monitor.** Asked per edge,
+the bounds check passed both horizontals for a window sitting on the screen to
+the *right* at the same height, so the laptop got two full-width lines through
+it pointing at a window that was not there. Caught by a test, which is the only
+way it was going to be caught: it takes two monitors to happen at all. The guard
+is now on the window intersecting the screen, asked once, before any edge is.
+
+The glow is an `NSShadow` in the accent colour with no offset, stroked twice —
+once is a haze that reads as the ring being out of focus rather than as light
+coming off it. Measured outward from the stroke: alpha 0.541 at 12 points, 0.471
+at 22, back to the scrim's 0.451 by 77.
+
+**`Dim the Other Windows`**, on by default, with the other two switches under
+⌥Tab. It is the only one of the three that needs no permission, which is most of
+why it is worth having: on a machine that has granted nothing, it is the only
+thing in this feature that makes the chosen window easier to find.
+
+#### Measuring a ring that carries a picture of somebody's window
+
+The instrument needed its own rule, and it is worth keeping. The ring holds a
+picture of the chosen window, so a screenshot taken while the choice happens to
+be a browser puts somebody's page on disk — which is exactly what happened once
+here, and the file was deleted. The probe now **refuses to capture unless Zonas'
+own log names a window belonging to the probe's own backdrop app**, which is
+five plain grey windows it opens for the purpose. Two runs were refused by it.
+
+`Log.write` is asynchronous, so the line naming the choice lands a moment after
+the press it describes: read once, the interlock answers with the *previous*
+session's choice — it refused a good run that way, and would eventually have
+allowed a bad one. It re-reads until the line changes.
+
+And a window captured on its own has nothing behind it, so `-l` measures the
+drawing and not the composite: the scrim's alpha, the guides' positions and the
+glow's falloff all come off a capture of Zonas' own windows, where the numbers
+above are alpha rather than luminance. Neither `screencapture -R` of a region
+nor several `-l` windows at once produced a usable composite of the probe's
+windows *under* the scrim, so the chosen-versus-neighbour brightness is stated
+as what it is: everything that is not the chosen window is multiplied by 0.553,
+and the chosen window is multiplied by nothing.
+
 **What it does not do.** There is no picture for the first 150 to 220 ms a
 window is chosen for the first time in a session — the ring is as it always was
 until the capture lands — and none at all for a minimized or hidden window,
