@@ -360,49 +360,84 @@ private final class SwitcherCellView: NSView {
 /// glance. `RingView` is where the drawing of it is argued.
 final class WindowHighlight {
 
-    private var window: NSWindow?
-    private let ring = RingView()
+    /// One window per **display**, not one the size of the thing being ringed.
+    ///
+    /// It used to be the second: a borderless window at the chosen window's
+    /// frame grown by five points, which is all a ring needs. Three of the four
+    /// things drawn now are about the *rest* of the screen — the scrim, and the
+    /// two pairs of guides that run off to the bezels — so the view has to be
+    /// the screen. Keyed by `displayID` for the reason `OverlayController`
+    /// documents: AppKit hands out fresh `NSScreen` instances on every display
+    /// reconfiguration, so a dictionary keyed by one grows an entry and a window
+    /// every time a monitor is plugged in and never lets go of the old ones.
+    private var windows: [CGDirectDisplayID: NSWindow] = [:]
 
     /// Rings a window, given its frame in CG coordinates, and puts `picture`
     /// inside the ring — `nil` for no permission, or for the moment before the
     /// first capture of this window has arrived.
     func show(_ frame: CGRect, picture: NSImage? = nil) {
-        let window = self.window ?? make()
-        // Before the frame, so that a redraw the move asks for is one that
-        // already has the picture in it.
-        ring.picture = picture
-        // Just outside the window, so the ring does not cover its edge.
-        window.setFrame(Coords.cgToCocoa(frame).insetBy(dx: -5, dy: -5), display: true)
-        window.orderFrontRegardless()
+        let cocoa = Coords.cgToCocoa(frame)
+        let spotlight = Spotlight.isOn()
+
+        for screen in NSScreen.screens {
+            guard let display = screen.displayID else { continue }
+            // The window's frame in this screen's own view coordinates: the
+            // view fills the screen, so it is the global rectangle less the
+            // screen's origin. A second monitor does not start at zero, and
+            // measuring against the desktop instead would put the hole off the
+            // end of every screen but the first.
+            let hole = cocoa.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
+            let bounds = CGRect(origin: .zero, size: screen.frame.size)
+
+            // With the spotlight off there is nothing to say about a screen the
+            // window is not on, and a full-screen transparent window per monitor
+            // for the sake of drawing nothing in it is compositing work for no
+            // picture.
+            guard spotlight || Spotlight.holds(hole, in: bounds) else {
+                windows[display]?.orderOut(nil)
+                continue
+            }
+
+            let window = windows[display] ?? make(on: display)
+            window.setFrame(screen.frame, display: false)
+            (window.contentView as? RingView)?.show(hole: hole,
+                                                    picture: picture,
+                                                    spotlight: spotlight)
+            window.orderFrontRegardless()
+        }
     }
 
     func hide() {
-        window?.orderOut(nil)
-        // Or the next window ringed with no picture of its own — a different
-        // application, as often as not — appears inside the last one's for as
-        // long as it takes the first capture to arrive.
-        ring.picture = nil
+        for window in windows.values {
+            window.orderOut(nil)
+            // Or the next window ringed with no picture of its own — a different
+            // application, as often as not — appears inside the last one's for as
+            // long as it takes the first capture to arrive.
+            (window.contentView as? RingView)?.forget()
+        }
     }
 
-    private func make() -> NSWindow {
+    private func make(on display: CGDirectDisplayID) -> NSWindow {
         let window = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
         // Click-through: it lies over the window being chosen and, as often
-        // as not, under the strip the pointer is choosing with.
+        // as not, under the strip the pointer is choosing with. It now lies
+        // over every *other* window too, which makes this line load-bearing
+        // rather than tidy.
         window.ignoresMouseEvents = true
         // Above everything but the strip, the chosen window included, since
         // that one can be anywhere in the stack.
         window.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue - 1)
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        window.contentView = ring
-        self.window = window
+        window.contentView = RingView()
+        windows[display] = window
         return window
     }
 }
 
-/// The ring, and the picture of the window inside it.
+/// The scrim, the guides, the ring, and the picture of the window inside it.
 private final class RingView: NSView {
 
     /// How much of the picture is let through, over the black it is drawn on.
@@ -413,35 +448,129 @@ private final class RingView: NSView {
     /// says that it has.
     private static let fade: CGFloat = 0.78
 
-    /// The picture of the window this ring is around.
-    var picture: NSImage? {
-        didSet {
-            guard picture !== oldValue else { return }
-            needsDisplay = true
+    /// The window this ring is around, in this view's coordinates.
+    private var hole: CGRect = .zero
+
+    /// The picture of that window.
+    private var picture: NSImage?
+
+    /// Whether the rest of the screen is pushed back. Off, this view draws what
+    /// it drew before the spotlight existed: a ring, and nothing else.
+    private var spotlight = true
+
+    func show(hole: CGRect, picture: NSImage?, spotlight: Bool) {
+        guard hole != self.hole || picture !== self.picture || spotlight != self.spotlight else {
+            return
         }
+        self.hole = hole
+        self.picture = picture
+        self.spotlight = spotlight
+        needsDisplay = true
+    }
+
+    func forget() {
+        picture = nil
+        hole = .zero
+        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 2.5, dy: 2.5), xRadius: 14, yRadius: 14)
+        let onThisScreen = Spotlight.holds(hole, in: bounds) && !hole.isEmpty
+
+        // The hole is the window itself; the ring sits just outside it, inner
+        // edge on the window's own edge, which is where it has always been.
+        let ring = NSBezierPath(roundedRect: hole.insetBy(dx: -2.5, dy: -2.5),
+                                xRadius: 14, yRadius: 14)
+
+        if spotlight {
+            drawScrim(cutting: onThisScreen ? hole : nil)
+            if onThisScreen { drawGuides() }
+        }
+
+        guard onThisScreen else { return }
+
         if let picture { drawGhost(picture, in: ring) }
         // Over the picture, and lighter when there is one: the wash is what
         // keeps a ringed window the accent colour rather than just a dimmed
         // one, and at 0.12 over a picture it tinted the whole thing blue.
         NSColor.controlAccentColor.withAlphaComponent(picture == nil ? 0.12 : 0.08).setFill()
         ring.fill()
+        drawRing(ring)
+    }
+
+    /// Everything that is not the chosen window, pushed back.
+    ///
+    /// **A hole and not a lighter fill, and §5 is why.** The obvious version
+    /// paints the screen dark and the chosen window lighter, and over a scrim a
+    /// lighter fill is *additive* where the scrim is multiplicative: on a dark
+    /// desktop that comes out brighter than not dimming at all, which is the
+    /// mistake the editor's first build shipped and the reason it does not fill
+    /// its zones. Here the window is left alone and the black is drawn
+    /// everywhere else, with `evenOdd` cutting it out — so the chosen window is
+    /// not made brighter, it is the only thing that was never made darker.
+    private func drawScrim(cutting hole: CGRect?) {
+        let scrim = NSBezierPath(rect: bounds)
+        if let hole {
+            scrim.append(NSBezierPath(roundedRect: hole, xRadius: 12, yRadius: 12))
+            scrim.windingRule = .evenOdd
+        }
+        NSColor.black.withAlphaComponent(Spotlight.dim).setFill()
+        scrim.fill()
+    }
+
+    /// Two lines through the window's vertical edges and two through its
+    /// horizontal ones, clipped out of the window itself.
+    ///
+    /// Clipped rather than simply drawn, because a line across the chosen
+    /// window is a line across the one thing on the screen that is meant to be
+    /// untouched — and with the picture in the ring it would be a line across a
+    /// picture of it, which reads as a crack in the glass.
+    private func drawGuides() {
+        NSGraphicsContext.saveGraphicsState()
+        let outside = NSBezierPath(rect: bounds)
+        outside.append(NSBezierPath(roundedRect: hole, xRadius: 12, yRadius: 12))
+        outside.windingRule = .evenOdd
+        outside.addClip()
+
+        NSColor.controlAccentColor.withAlphaComponent(Spotlight.guideAlpha).setFill()
+        for line in Spotlight.guides(around: hole, in: bounds) {
+            line.fill()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    /// The ring, with a glow around it.
+    ///
+    /// The glow is an `NSShadow` in the accent colour with no offset, which is
+    /// the cheapest halo there is and needs no second window: the ring used to
+    /// live in one exactly five points bigger than the window, so there was
+    /// nowhere for a glow to go. Now the view is the screen and it has room.
+    ///
+    /// Stroked twice. Once is a haze that reads as the ring being slightly out
+    /// of focus rather than as light coming off it; the second pass lands the
+    /// shadow on top of itself and is what turns it into a glow.
+    private func drawRing(_ ring: NSBezierPath) {
+        NSGraphicsContext.saveGraphicsState()
+        let glow = NSShadow()
+        glow.shadowColor = NSColor.controlAccentColor.withAlphaComponent(0.85)
+        glow.shadowBlurRadius = 22
+        glow.shadowOffset = .zero
+        glow.set()
+
         NSColor.controlAccentColor.setStroke()
         ring.lineWidth = 5
         ring.stroke()
+        ring.stroke()
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     /// The picture, faded, exactly over where the window is.
     ///
-    /// `bounds` is the window's frame grown by 5 points on every side — the
-    /// ring sits outside the window, so the picture goes back in the middle of
-    /// it, at the size the window itself has. That it lands on the window's own
-    /// rectangle rather than filling the ring is the whole of the association:
-    /// what you see is the shape you are about to get, in the place you are
-    /// about to get it.
+    /// The ring sits outside the window, so the picture goes on `hole` — the
+    /// window's own rectangle — at the size the window itself has. That it
+    /// lands there rather than filling the ring is the whole of the
+    /// association: what you see is the shape you are about to get, in the
+    /// place you are about to get it.
     ///
     /// `fit` and not the rectangle itself, because the picture can be a press
     /// or two old and a window resized since would otherwise be stretched.
@@ -460,9 +589,8 @@ private final class RingView: NSView {
         // settled it.
         NSColor.black.setFill()
         ring.fill()
-        let room = bounds.insetBy(dx: 5, dy: 5).size
-        let size = WindowSwitcher.fit(picture.size, into: room, enlarging: true)
-        picture.draw(in: NSRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,
+        let size = WindowSwitcher.fit(picture.size, into: hole.size, enlarging: true)
+        picture.draw(in: NSRect(x: hole.midX - size.width / 2, y: hole.midY - size.height / 2,
                                width: size.width, height: size.height),
                      from: .zero, operation: .sourceOver, fraction: RingView.fade)
         NSGraphicsContext.restoreGraphicsState()

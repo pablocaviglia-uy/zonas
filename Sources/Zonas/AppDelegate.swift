@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var windowsHintItem: NSMenuItem?
     private var previewsItem: NSMenuItem?
     private var ringItem: NSMenuItem?
+    private var spotlightItem: NSMenuItem?
     private var windowSwitcherItem: NSMenuItem?
     private var permissionsItem: NSMenuItem?
     private let shortcuts = ShortcutController()
@@ -577,6 +578,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let ring = ownItem("Picture in the Ring", #selector(togglePreviewInRing))
         ringItem = ring
         windowChoices.addItem(ring)
+        // Needs no permission and is on by default, unlike the two above it —
+        // it is the only thing in this submenu that makes the chosen window
+        // easier to find on a machine that has granted nothing.
+        let spotlight = ownItem("Dim the Other Windows", #selector(toggleSpotlight))
+        spotlightItem = spotlight
+        windowChoices.addItem(spotlight)
 
         // A submenu and not a row of items, because the list is however many
         // monitors are plugged in and it changes while the app is running.
@@ -710,6 +717,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // is there, and this one is the answer to "why is my window covered by
         // a picture of itself".
         ringItem?.state = previewing && WindowPreviews.isInRing() ? .on : .off
+        spotlightItem?.state = Spotlight.isOn() ? .on : .off
 
         // Gone once there is nothing to grant. The welcome window keeps the way
         // back — it has the permission row, in all three of its states — and it
@@ -804,6 +812,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let on = !WindowPreviews.isInRing()
         WindowPreviews.setInRing(on)
         Log.write("windows: the picture in the ring is \(on ? "on" : "off") — from the menu")
+    }
+
+    @objc private func toggleSpotlight() {
+        let on = !Spotlight.isOn()
+        Spotlight.setOn(on)
+        Log.write("windows: dimming the rest of the screen is \(on ? "on" : "off") — from the menu")
     }
 
     @objc private func openPermissions() {
