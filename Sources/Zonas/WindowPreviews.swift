@@ -1,5 +1,7 @@
 import AppKit
 import ScreenCaptureKit
+import CoreImage
+import CoreMedia
 
 /// Pictures of other applications' windows for ⌥Tab, when Zonas is allowed to
 /// take them.
@@ -52,9 +54,7 @@ final class WindowPreviews {
         defaults.set(on, forKey: onKey)
     }
 
-    /// Whether the picture also goes inside the ring on the desktop. Off, ⌥Tab
-    /// is what it was before the ring learned to carry one: the strip keeps its
-    /// picture and the ring goes back to being an outline.
+    /// Independent of the carousel: show a live picture at the window position.
     static func isInRing(_ defaults: UserDefaults = .standard) -> Bool {
         defaults.object(forKey: inRingKey) as? Bool ?? true
     }
@@ -113,6 +113,7 @@ final class WindowPreviews {
     }
 
     func end() {
+        stopStream()
         listing = nil
     }
 
@@ -152,6 +153,76 @@ final class WindowPreviews {
         }
     }
 
+    private var livePictures: [CGWindowID: NSImage] = [:]
+    private var liveStream: SCStream?
+    private var liveOutput: LivePreviewOutput?
+    private var liveWindow: CGWindowID?
+    private var streamGeneration = UUID()
+
+    func livePicture(of window: CGWindowID) -> NSImage? {
+        livePictures[window]
+    }
+
+    func stopStream() {
+        streamGeneration = UUID()
+        liveWindow = nil
+        let old = liveStream
+        liveStream = nil
+        liveOutput = nil
+        livePictures.removeAll()
+        if let old { Task { try? await old.stopCapture() } }
+    }
+
+    /// Only the selected window streams, and only while the switcher is open.
+    func stream(_ window: CGWindowID, size: CGSize,
+                then update: @escaping () -> Void) {
+        guard liveWindow != window else { return }
+        stopStream()
+        liveWindow = window
+        let generation = streamGeneration
+        let known = listed?.windows.first { $0.windowID == window }
+        let pending = listing
+        Task { @MainActor in
+            let target: SCWindow?
+            if let known { target = known }
+            else { target = await pending?.value?.windows.first { $0.windowID == window } }
+            guard let target, self.streamGeneration == generation else { return }
+            let filter = SCContentFilter(desktopIndependentWindow: target)
+            let scale = CGFloat(filter.pointPixelScale)
+            let config = SCStreamConfiguration()
+            config.width = max(1, Int(size.width * scale))
+            config.height = max(1, Int(size.height * scale))
+            // Independent window streams otherwise only scale down. A 1x
+            // window in a 2x buffer occupied its top-left quarter, which the
+            // preview then drew as if the whole buffer contained the window.
+            config.scalesToFit = true
+            config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+            config.queueDepth = 3
+            config.showsCursor = false
+            config.ignoreShadowsSingleWindow = true
+            let output = LivePreviewOutput { [weak self] image in
+                DispatchQueue.main.async {
+                    guard let self, self.streamGeneration == generation else { return }
+                    self.livePictures[window] = NSImage(cgImage: image, size: size)
+                    update()
+                }
+            }
+            let stream = SCStream(filter: filter,
+                                  configuration: config, delegate: nil)
+            do {
+                try stream.addStreamOutput(output, type: .screen,
+                                           sampleHandlerQueue: DispatchQueue(label: "uy.com.fcstudio.zonas.preview"))
+                self.liveStream = stream
+                self.liveOutput = output
+                try await stream.startCapture()
+                if self.streamGeneration != generation { try? await stream.stopCapture() }
+            } catch {
+                if self.streamGeneration == generation { self.stopStream() }
+                Log.write("windows: live preview failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
     private static func take(_ window: SCWindow, size windowSize: CGSize,
                              fitting box: CGSize, scale: CGFloat) async -> NSImage? {
         let size = WindowSwitcher.fit(windowSize, into: box)
@@ -168,5 +239,25 @@ final class WindowPreviews {
             return nil
         }
         return NSImage(cgImage: image, size: size)
+    }
+}
+
+/// Convert frames away from the main thread; AppKit drawing stays on it.
+private final class LivePreviewOutput: NSObject, SCStreamOutput {
+    private let context = CIContext()
+    private let deliver: (CGImage) -> Void
+
+    init(deliver: @escaping (CGImage) -> Void) { self.deliver = deliver }
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+                of type: SCStreamOutputType) {
+        guard type == .screen, sampleBuffer.isValid,
+              let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
+                as? [[SCStreamFrameInfo: Any]],
+              let status = attachments.first?[.status] as? Int,
+              status == SCFrameStatus.complete.rawValue,
+              let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let frame = CIImage(cvPixelBuffer: buffer)
+        if let image = context.createCGImage(frame, from: frame.extent) { deliver(image) }
     }
 }

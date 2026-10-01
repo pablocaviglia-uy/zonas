@@ -310,21 +310,19 @@ monitors included. What is not: windows on other Spaces — bringing one forward
 would slide the whole desktop sideways — and small toolbars and palettes that
 have no title.
 
-**A picture of the chosen window, if you want one.** `Show Window Previews…` in
-the menu asks macOS for the Screen Recording permission, which is what taking
-a picture of another application's window needs; once it is granted, the strip
-has a large picture of the chosen window above it. It is off until you choose
-it, because Screen Recording is a permission to think about: it lets an app see
-everything on your screen, and from macOS 15 macOS asks you to confirm it again
-every so often with a dialog about letting the app "bypass the system private
-window picker". Zonas takes a picture only while the strip is open, keeps it in
-memory while the window is open, and writes it nowhere. Without the permission
-nothing else changes — the strip, the labels and the ring are all still there.
+**Two independent previews, if you want them.** Under `Window Switcher (⌥Tab)`,
+`Preview in Carousel` shows a picture above the icons, and `Preview at Window
+Position` shows the selected window live inside its ring. Turn either on or off
+without changing the other. The live preview uses the window's own pixel scale,
+so text stays sharp and playing video keeps moving, with Zonas' dimming and
+accent effects over it. Only the selected window streams, at up to 30 frames
+per second, and the stream stops when the switcher closes.
 
-The same picture is what goes inside the ring out on the desktop, so turning
-previews on changes two things at once and costs one capture either way. Both
-have a switch in the menu, under `Window Switcher (⌥Tab)`: previews at all, and
-the picture in the ring.
+Both need Screen Recording. `Enable Screen Recording…` in the same submenu
+opens macOS' permission settings and disappears once access is granted. Until
+then, both preview switches are disabled; the icons, labels, ring and dimming
+still work. From macOS 15, macOS periodically asks you to confirm access again.
+Pictures and video frames stay in memory and are never written to disk.
 
 `defaults.windowSwitcher: false` leaves ⌥Tab to the application in front. The
 key itself cannot be changed: ⌘Tab is macOS's own, ⌃Tab changes tabs in every

@@ -2183,7 +2183,7 @@ ring cannot do on its own: around a covered window it frames three *other*
 applications' pixels, so it says where to look and shows you somebody else's
 window. The picture now goes inside it, dimmed, on the window's own rectangle.
 
-**It is the strip's picture, not a second one.** `ringChoice` reads the same
+**The original shared-picture design, superseded on 2026-10-01 below.** `ringChoice` reads the same
 cache `showPreview` fills, so a machine without Screen Recording rings exactly
 as it did, one with it captures no more than before, and the ring cannot show a
 different window from the strip's. What that costs is sharpness: the strip asks
@@ -2479,6 +2479,34 @@ Driven through Accessibility to check it end to end rather than by reading the
 code: clicking `Window Previews` in the submenu logs the change, leaves the
 item unticked and leaves `Picture in the Ring` unticked *and disabled*, and
 clicking it again puts both back.
+
+### Independent previews and live window content — 2026-10-01
+
+The carousel and the picture at the window position now have independent
+switches: `Preview in Carousel` and `Preview at Window Position`. Turning the
+carousel off leaves the window-position preview available. Both retain their
+existing `UserDefaults` keys and require Screen Recording; the separate
+`Enable Screen Recording…` action disappears once that permission is granted.
+The main menu keeps its subject-based grouping.
+
+The carousel still uses cached screenshots. The window-position preview uses
+an `SCStream` for only the selected window, at up to 30 frames per second. Its
+buffer is sized using the window filter's `pointPixelScale`, and its image is
+drawn at the window's logical size with the existing fade, accent wash, ring
+and guides. Switching windows invalidates callbacks from the previous stream;
+closing the switcher stops capture and releases the live frame.
+
+The first installed build streamed video, confirmed at the desk, but it only
+filled the upper-left quarter of the preview. It had used the largest scale
+across all screens and left `scalesToFit` off. ScreenCaptureKit scales down
+but does not scale up in that mode, so a 1x window occupied only half the
+width and height of a 2x buffer. The correction uses the source window's own
+scale and explicitly enables `scalesToFit`.
+
+The corrected signed app was installed and its startup, signature and retained
+permissions were verified. The switcher's 43 tests passed. Visual confirmation
+of the corrected full-window video remains a separate check; startup and unit
+tests do not establish that result.
 
 ### Stage 5 — The visual editor · 12 days
 

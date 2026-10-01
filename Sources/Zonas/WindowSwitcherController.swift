@@ -415,8 +415,8 @@ final class WindowSwitcherController {
         // than a session that could change its mind halfway through.
         let showsPreviews = WindowPreviews.isAllowed && WindowPreviews.isOn()
         session?.showsPreviews = showsPreviews
-        session?.showsGhost = showsPreviews && WindowPreviews.isInRing()
-        if showsPreviews {
+        session?.showsGhost = WindowPreviews.isAllowed && WindowPreviews.isInRing()
+        if showsPreviews || session?.showsGhost == true {
             previews.begin(windows: Set(entries.compactMap(\.window.id)))
         }
         panel.prepare(WindowSwitcherController.rows(entries, around: screen), selected: cycle.index,
@@ -479,10 +479,7 @@ final class WindowSwitcherController {
     /// on screen, and not for a window that is minimized or hidden, which is
     /// nowhere to ring.
     ///
-    /// The picture that goes inside the ring is the one the strip is showing,
-    /// read out of the same cache and never captured for this. So the ring
-    /// costs nothing on a machine without Screen Recording, nothing extra on
-    /// one with it, and it cannot show a different window from the strip's.
+    /// The live picture is captured separately from the carousel thumbnail.
     private func ringChoice() {
         guard let session, session.isRevealed else { return }
         if let bounds = session.entries[session.cycle.index].bounds {
@@ -498,7 +495,7 @@ final class WindowSwitcherController {
     private func pictureOfChoice(_ session: Session) -> NSImage? {
         guard session.showsGhost,
               let id = session.entries[session.cycle.index].window.id else { return nil }
-        return previews.picture(of: id)
+        return previews.livePicture(of: id)
     }
 
     /// An icon clicked while the strip is up.
@@ -546,7 +543,16 @@ final class WindowSwitcherController {
     /// and a fresh one when it arrives — and the next window's, taken ahead,
     /// since that is where the next Tab goes.
     private func showPreview(of index: Int) {
-        guard let session, session.showsPreviews, session.entries.indices.contains(index) else { return }
+        guard let session, session.entries.indices.contains(index) else { return }
+        if session.showsGhost, let id = session.entries[index].window.id,
+           let bounds = session.entries[index].bounds {
+            previews.stream(id, size: bounds.size) { [weak self] in
+                self?.ringChoice()
+            }
+        } else {
+            previews.stopStream()
+        }
+        guard session.showsPreviews else { return }
         let number = session.number
         let next = (index + 1) % session.entries.count
         for (offset, position) in [index, next].enumerated() {
@@ -556,11 +562,6 @@ final class WindowSwitcherController {
                              fitting: panel.previewBox, scale: panel.scale) { [weak self] picture in
                 guard let self, self.session?.number == number else { return }
                 self.panel.showPreview(picture, forRow: position)
-                // Asked rather than told, and asked whichever row this picture
-                // is for: by the time a capture lands the choice may have moved
-                // on, and what the ring has to draw is whatever is chosen now —
-                // which `ringChoice` reads from the same cache this just filled.
-                self.ringChoice()
             }
         }
     }

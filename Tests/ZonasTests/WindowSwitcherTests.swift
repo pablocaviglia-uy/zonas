@@ -451,8 +451,7 @@ struct WindowPreviewSettingsTests {
         withDefaults { defaults in
             WindowPreviews.setOn(false, defaults)
             #expect(!WindowPreviews.isOn(defaults))
-            // The ring's own switch is untouched by the master: turning
-            // previews off and on again gives back the menu you left.
+            // Disabling the carousel leaves the window-position preview enabled.
             #expect(WindowPreviews.isInRing(defaults))
 
             WindowPreviews.setInRing(false, defaults)

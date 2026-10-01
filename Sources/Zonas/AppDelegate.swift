@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var shortcutHintItem: NSMenuItem?
     private var windowsHintItem: NSMenuItem?
     private var previewsItem: NSMenuItem?
+    private var previewPermissionItem: NSMenuItem?
     private var ringItem: NSMenuItem?
     private var spotlightItem: NSMenuItem?
     private var windowSwitcherItem: NSMenuItem?
@@ -569,13 +570,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(ourSwitcher)
 
         // The only place Zonas ever asks for Screen Recording. ⌥Tab works
-        // without it; this adds the picture of the chosen window. Once it is
-        // granted the item stops being a request and becomes the switch — see
+        // without it. The permission action disappears once granted; the two
+        // preview switches remain independent — see
         // `menuNeedsUpdate`, and `WindowPreviews` for why there is one at all.
-        let previews = ownItem("Show Window Previews…", #selector(showWindowPreviews))
+        let permission = ownItem("Enable Screen Recording…", #selector(showWindowPreviews))
+        previewPermissionItem = permission
+        windowChoices.addItem(permission)
+        let previews = ownItem("Preview in Carousel", #selector(toggleWindowPreviews))
         previewsItem = previews
         windowChoices.addItem(previews)
-        let ring = ownItem("Picture in the Ring", #selector(togglePreviewInRing))
+        let ring = ownItem("Preview at Window Position", #selector(togglePreviewInRing))
         ringItem = ring
         windowChoices.addItem(ring)
         // Needs no permission and is on by default, unlike the two above it —
@@ -709,14 +713,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // System Settings, for a feature this menu had asked for by name.
         let allowed = WindowPreviews.isAllowed
         let previewing = allowed && WindowPreviews.isOn()
-        previewsItem?.title = allowed ? "Window Previews" : "Show Window Previews…"
-        previewsItem?.action = allowed ? #selector(toggleWindowPreviews) : #selector(showWindowPreviews)
+        previewPermissionItem?.isHidden = allowed
         previewsItem?.state = previewing ? .on : .off
         // Shown even with no permission and no previews, greyed by
         // `validateMenuItem`: an item that disappears is a feature nobody knows
         // is there, and this one is the answer to "why is my window covered by
         // a picture of itself".
-        ringItem?.state = previewing && WindowPreviews.isInRing() ? .on : .off
+        ringItem?.state = allowed && WindowPreviews.isInRing() ? .on : .off
         spotlightItem?.state = Spotlight.isOn() ? .on : .off
 
         // Gone once there is nothing to grant. The welcome window keeps the way
@@ -789,7 +792,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // Nothing to put in the ring while there are no pictures at all, and a
         // checkbox that can be ticked with nothing to show for it is worse than
         // one that is visibly not available yet.
-        if item === ringItem { return WindowPreviews.isAllowed && WindowPreviews.isOn() }
+        if item === ringItem || item === previewsItem { return WindowPreviews.isAllowed }
         return true
     }
 
