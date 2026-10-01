@@ -318,6 +318,12 @@ so text stays sharp and playing video keeps moving, with Zonas' dimming and
 accent effects over it. Only the selected window streams, at up to 30 frames
 per second, and the stream stops when the switcher closes.
 
+Moving through the carousel keeps the previous live preview visible until the
+next window's first frame arrives, then changes its picture and position
+together. Recent frames are reused during the same switcher session. If capture
+fails or no frame arrives within 350 ms, the selected window's ring appears
+without a picture.
+
 Both need Screen Recording. `Enable Screen Recording…` in the same submenu
 opens macOS' permission settings and disappears once access is granted. Until
 then, both preview switches are disabled; the icons, labels, ring and dimming
@@ -341,9 +347,10 @@ is missing — has:
 | `Edit the File…` | Opens `zonas.json5` in your default editor |
 | `Reload Zones` (⌘R) | Re-reads the file after you edit it |
 | **The two switchers** | |
-| `Window Switcher (⌥Tab)` ▸ | Zonas' own, and its two settings |
-| ⤷ `Show Window Previews…` | Asks for Screen Recording. Once granted it becomes **`Window Previews`**, a checkbox — so previews can be turned off again without going back to System Settings |
-| ⤷ `Picture in the Ring` | Whether the picture also goes inside the ring drawn around the chosen window. On by default; greyed out while there are no previews to put there |
+| `Window Switcher (⌥Tab)` ▸ | Zonas' own, with independent previews and dimming |
+| ⤷ `Enable Screen Recording…` | Asks for Screen Recording; hidden once access is granted |
+| ⤷ `Preview in Carousel` | A picture above the icons. On by default; needs Screen Recording |
+| ⤷ `Preview at Window Position` | Live content inside the chosen window's ring. On by default; needs Screen Recording and works independently of the carousel preview |
 | ⤷ `Dim the Other Windows` | Whether choosing a window pushes the rest of the screen back behind a wash, with guides to the chosen window's edges. On by default, and needs no permission |
 | `App Switcher (⌘Tab)` ▸ | macOS' own: which screen it opens on — see below |
 | **Zonas itself** | |
@@ -358,7 +365,7 @@ where is decided by what each item is *about* — your zones, the switchers,
 the app — rather than by when it was added, which is what the menu used to be
 sorted by.
 
-Both checkboxes live in `UserDefaults`, not in your layout file: whether this
+The preview and dimming checkboxes live in `UserDefaults`, not in your layout file: whether this
 machine draws pictures of windows is bounded by a permission that belongs to
 this machine, and a layout committed to a dotfiles repo has no business
 carrying it to a desk where that permission was never granted.

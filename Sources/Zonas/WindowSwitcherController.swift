@@ -60,6 +60,8 @@ final class WindowSwitcherController {
     private let panel = WindowSwitcherPanel()
     private let previews = WindowPreviews()
     private let highlight = WindowHighlight()
+    private var previewHandoff = PreviewHandoff<NSImage>()
+    private var previewDeadline: DispatchWorkItem?
 
     /// How many sessions there have been, so a picture that arrives after
     /// its session has ended cannot be shown in the next one — where the same
@@ -482,11 +484,34 @@ final class WindowSwitcherController {
     /// The live picture is captured separately from the carousel thumbnail.
     private func ringChoice() {
         guard let session, session.isRevealed else { return }
-        if let bounds = session.entries[session.cycle.index].bounds {
-            highlight.show(bounds, picture: pictureOfChoice(session))
-        } else {
-            highlight.hide()
+        let entry = session.entries[session.cycle.index]
+        let picture = pictureOfChoice(session)
+        let failed = entry.window.id.map { previews.liveCaptureFailed(for: $0) } ?? false
+        let previousToken = previewHandoff.pendingToken
+        let frame = previewHandoff.choose(window: entry.window.id, bounds: entry.bounds, picture: picture,
+                                           expectsPicture: session.showsGhost && !failed)
+        if let frame { highlight.show(frame.bounds, picture: frame.picture) }
+        else { highlight.hide() }
+
+        guard let token = previewHandoff.pendingToken else {
+            previewDeadline?.cancel(); previewDeadline = nil
+            return
         }
+        guard token != previousToken else { return }
+        previewDeadline?.cancel()
+        // A compositor/device failure is different from warming up. Bound the
+        // wait so it cannot leave an unrelated window highlighted indefinitely.
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.session?.number == session.number,
+                  self.previewHandoff.pendingToken == token else { return }
+            if let fallback = self.previewHandoff.fail(token) {
+                self.highlight.show(fallback.bounds, picture: fallback.picture)
+                Log.write("windows: live preview timed out after 350 ms — showing the ring without a picture")
+            }
+            self.previewDeadline = nil
+        }
+        previewDeadline = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
     /// The picture of the chosen window, if there is one to have: `nil` for
@@ -569,6 +594,8 @@ final class WindowSwitcherController {
     /// Back to no session: no strip, no ⌥Esc or ⌥Q, nothing polling.
     private func end() {
         session = nil
+        previewDeadline?.cancel(); previewDeadline = nil
+        previewHandoff.reset()
         previews.end()
         highlight.hide()
         poll?.invalidate()

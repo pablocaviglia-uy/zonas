@@ -114,6 +114,7 @@ final class WindowPreviews {
 
     func end() {
         stopStream()
+        livePictures.reset()
         listing = nil
     }
 
@@ -153,15 +154,18 @@ final class WindowPreviews {
         }
     }
 
-    private var livePictures: [CGWindowID: NSImage] = [:]
+    private var livePictures = PreviewFrameCache<NSImage>()
     private var liveStream: SCStream?
     private var liveOutput: LivePreviewOutput?
     private var liveWindow: CGWindowID?
     private var streamGeneration = UUID()
+    private var failedWindow: CGWindowID?
 
     func livePicture(of window: CGWindowID) -> NSImage? {
-        livePictures[window]
+        livePictures.picture(of: window)
     }
+
+    func liveCaptureFailed(for window: CGWindowID) -> Bool { failedWindow == window }
 
     func stopStream() {
         streamGeneration = UUID()
@@ -169,7 +173,7 @@ final class WindowPreviews {
         let old = liveStream
         liveStream = nil
         liveOutput = nil
-        livePictures.removeAll()
+        failedWindow = nil
         if let old { Task { try? await old.stopCapture() } }
     }
 
@@ -180,13 +184,22 @@ final class WindowPreviews {
         stopStream()
         liveWindow = window
         let generation = streamGeneration
+        let began = DispatchTime.now()
+        var firstFrame = true
         let known = listed?.windows.first { $0.windowID == window }
         let pending = listing
         Task { @MainActor in
             let target: SCWindow?
             if let known { target = known }
             else { target = await pending?.value?.windows.first { $0.windowID == window } }
-            guard let target, self.streamGeneration == generation else { return }
+            guard self.streamGeneration == generation else { return }
+            guard let target else {
+                self.failedWindow = window
+                self.liveWindow = nil
+                Log.write("windows: live preview unavailable for window \(window)")
+                update()
+                return
+            }
             let filter = SCContentFilter(desktopIndependentWindow: target)
             let scale = CGFloat(filter.pointPixelScale)
             let config = SCStreamConfiguration()
@@ -203,7 +216,13 @@ final class WindowPreviews {
             let output = LivePreviewOutput { [weak self] image in
                 DispatchQueue.main.async {
                     guard let self, self.streamGeneration == generation else { return }
-                    self.livePictures[window] = NSImage(cgImage: image, size: size)
+                    if firstFrame {
+                        firstFrame = false
+                        let elapsed = (DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000
+                        Log.write("windows: live preview first frame for \(window) after \(elapsed) ms")
+                    }
+                    self.livePictures.store(NSImage(cgImage: image, size: size), for: window,
+                                            bytes: image.bytesPerRow * image.height)
                     update()
                 }
             }
@@ -217,7 +236,11 @@ final class WindowPreviews {
                 try await stream.startCapture()
                 if self.streamGeneration != generation { try? await stream.stopCapture() }
             } catch {
-                if self.streamGeneration == generation { self.stopStream() }
+                if self.streamGeneration == generation {
+                    self.stopStream()
+                    self.failedWindow = window
+                    update()
+                }
                 Log.write("windows: live preview failed: \(error.localizedDescription)")
             }
         }

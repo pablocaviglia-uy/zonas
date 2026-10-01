@@ -2496,6 +2496,23 @@ drawn at the window's logical size with the existing fade, accent wash, ring
 and guides. Switching windows invalidates callbacks from the previous stream;
 closing the switcher stops capture and releases the live frame.
 
+The subsequent transition correction keeps recent native frames during one
+switcher session (LRU, four entries and a 64 MiB cache budget; one oversized
+current frame is allowed). Stopping one stream to select another no longer
+clears every cached frame. Closing the switcher still releases them all.
+The cache budget does not include ScreenCaptureKit's buffers or the picture
+currently retained by the visible overlay.
+
+An uncached selection now waits for its first frame before changing the large
+preview's picture and rectangle together. The carousel's choice updates at once.
+Previously, the new rectangle was first drawn with no picture, revealing the
+desktop below, then made opaque when capture arrived: that brightness change was
+the reported flash. The renderer regression reproduces the alpha difference and
+checks that a delayed handoff remains opaque. A failed capture, or 350 ms without
+a frame, falls back to the selected window's plain ring; old deadlines and stream
+callbacks cannot replace a later choice. First-frame latency is logged once per
+stream to make signed-app measurements possible.
+
 The first installed build streamed video, confirmed at the desk, but it only
 filled the upper-left quarter of the preview. It had used the largest scale
 across all screens and left `scalesToFit` off. ScreenCaptureKit scales down

@@ -438,7 +438,7 @@ final class WindowHighlight {
 }
 
 /// The scrim, the guides, the ring, and the picture of the window inside it.
-private final class RingView: NSView {
+final class RingView: NSView {
 
     /// How much of the picture is let through, over the black it is drawn on.
     ///
