@@ -316,13 +316,18 @@ Position` shows the selected window live inside its ring. Turn either on or off
 without changing the other. The live preview uses the window's own pixel scale,
 so text stays sharp and playing video keeps moving, with Zonas' dimming and
 accent effects over it. Only the selected window streams, at up to 30 frames
-per second, and the stream stops when the switcher closes.
+per second. Capture stops after the chosen window's visual handoff, or immediately
+when the switcher is cancelled.
 
 Moving through the carousel keeps the previous live preview visible until the
 next window's first frame arrives, then changes its picture and position
 together. Recent frames are reused during the same switcher session. If capture
 fails or no frame arrives within 350 ms, the selected window's ring appears
 without a picture.
+
+On commit, the blue ring, tint and dimming fade first while the live picture
+returns to its original colours. The unstyled preview then fades over the
+activated window. A new shortcut cancels the previous transition immediately.
 
 Both need Screen Recording. `Enable Screen Recording…` in the same submenu
 opens macOS' permission settings and disappears once access is granted. Until

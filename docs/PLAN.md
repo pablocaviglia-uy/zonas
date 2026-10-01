@@ -2494,12 +2494,12 @@ an `SCStream` for only the selected window, at up to 30 frames per second. Its
 buffer is sized using the window filter's `pointPixelScale`, and its image is
 drawn at the window's logical size with the existing fade, accent wash, ring
 and guides. Switching windows invalidates callbacks from the previous stream;
-closing the switcher stops capture and releases the live frame.
+finishing the visual handoff stops capture and releases the live frame.
 
 The subsequent transition correction keeps recent native frames during one
 switcher session (LRU, four entries and a 64 MiB cache budget; one oversized
 current frame is allowed). Stopping one stream to select another no longer
-clears every cached frame. Closing the switcher still releases them all.
+clears every cached frame. Finishing or cancelling the switcher still releases them all.
 The cache budget does not include ScreenCaptureKit's buffers or the picture
 currently retained by the visible overlay.
 
@@ -2512,6 +2512,16 @@ checks that a delayed handoff remains opaque. A failed capture, or 350 ms withou
 a frame, falls back to the selected window's plain ring; old deadlines and stream
 callbacks cannot replace a later choice. First-frame latency is logged once per
 stream to make signed-app measurements possible.
+
+On commit, a matching live preview stays above the activated window while its
+selection styling fades over 160 ms: ring, tint, guides and scrim disappear, and
+the image returns from 78% brightness to its source colours without becoming
+translucent. After a 60 ms neutral hold and focus readback, the preview fades
+over 120 ms. Capture continues during this handoff so playing video keeps moving.
+Focus waiting is bounded at 700 ms. Cancelling, a new session, or committing an
+uncached selection hides immediately; an old completion or focus retry cannot
+affect the next session. Renderer regressions check source RGB, opacity and the
+absence of the enlarged black backing after styling has disappeared.
 
 The first installed build streamed video, confirmed at the desk, but it only
 filled the upper-left quarter of the preview. It had used the largest scale

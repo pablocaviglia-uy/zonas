@@ -14,7 +14,8 @@ struct PreviewRenderingTests {
         }
     }
 
-    private func alpha(_ frame: PreviewHandoff<NSImage>.Frame, at point: CGPoint) throws -> CGFloat {
+    private func color(_ frame: PreviewHandoff<NSImage>.Frame, at point: CGPoint,
+                       effects: CGFloat = 1, spotlight: Bool = false) throws -> NSColor {
         let bitmap = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 300, pixelsHigh: 110,
                                                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
                                                    isPlanar: false, colorSpaceName: .deviceRGB,
@@ -25,10 +26,15 @@ struct PreviewRenderingTests {
         NSColor.clear.setFill()
         CGRect(x: 0, y: 0, width: 300, height: 110).fill(using: .copy)
         let view = RingView(frame: CGRect(x: 0, y: 0, width: 300, height: 110))
-        view.show(hole: frame.bounds, picture: frame.picture, spotlight: false)
+        view.show(hole: frame.bounds, picture: frame.picture, spotlight: spotlight)
+        view.setEffectsOpacity(effects)
         view.draw(view.bounds)
         NSGraphicsContext.restoreGraphicsState()
-        return try #require(bitmap.colorAt(x: Int(point.x), y: 110 - Int(point.y))).alphaComponent
+        return try #require(bitmap.colorAt(x: Int(point.x), y: 110 - Int(point.y))).usingColorSpace(.deviceRGB)!
+    }
+
+    private func alpha(_ frame: PreviewHandoff<NSImage>.Frame, at point: CGPoint) throws -> CGFloat {
+        try color(frame, at: point).alphaComponent
     }
 
     @Test("The old nil-frame rendering is translucent; an actual ghost is opaque")
@@ -54,5 +60,28 @@ struct PreviewRenderingTests {
         let ready = try #require(choice)
         #expect(ready.bounds == b)
         #expect(try alpha(ready, at: CGPoint(x: b.midX, y: b.midY)) > 0.99)
+    }
+
+    @Test("Before the image fades, the preview has the source colours and remains opaque")
+    func neutralImageMatchesSource() throws {
+        let frame = PreviewHandoff<NSImage>.Frame(window: 1, bounds: a, picture: image(.red))
+        let centre = CGPoint(x: a.midX, y: a.midY)
+        let styled = try color(frame, at: centre)
+        let neutral = try color(frame, at: centre, effects: 0, spotlight: true)
+        #expect(styled.redComponent < 0.95)
+        #expect(neutral.redComponent > 0.99)
+        #expect(neutral.greenComponent < 0.01)
+        #expect(neutral.blueComponent < 0.01)
+        #expect(neutral.alphaComponent > 0.99)
+    }
+
+    @Test("Removing the selection styling also removes the border, guides and scrim")
+    func neutralImageHasNoOuterEffects() throws {
+        let frame = PreviewHandoff<NSImage>.Frame(window: 1, bounds: a, picture: image(.white))
+        // The former expanded black backing extended 2.5 points beyond the window.
+        let edge = try color(frame, at: CGPoint(x: a.maxX + 1, y: a.midY), effects: 0, spotlight: true)
+        let desktop = try color(frame, at: CGPoint(x: 280, y: a.midY), effects: 0, spotlight: true)
+        #expect(edge.alphaComponent < 0.01)
+        #expect(desktop.alphaComponent < 0.01)
     }
 }

@@ -62,6 +62,8 @@ final class WindowSwitcherController {
     private let highlight = WindowHighlight()
     private var previewHandoff = PreviewHandoff<NSImage>()
     private var previewDeadline: DispatchWorkItem?
+    private var exitingPreview: (window: CGWindowID, token: UUID)?
+    private var activationToken = UUID()
 
     /// How many sessions there have been, so a picture that arrives after
     /// its session has ended cannot be shown in the next one — where the same
@@ -370,6 +372,10 @@ final class WindowSwitcherController {
     }
 
     private func begin(backwards: Bool) {
+        activationToken = UUID()
+        // A fresh shortcut owns the overlay and capture immediately; an old
+        // dismissal must never hide the new switcher or stop its stream.
+        if exitingPreview != nil { end() }
         // Everything is timed from here — the wait before the list appears
         // included, so that reading the windows happens inside it rather than
         // before it.
@@ -483,6 +489,9 @@ final class WindowSwitcherController {
     ///
     /// The live picture is captured separately from the carousel thumbnail.
     private func ringChoice() {
+        if let exitingPreview, let picture = previews.livePicture(of: exitingPreview.window) {
+            highlight.updatePicture(picture)
+        }
         guard let session, session.isRevealed else { return }
         let entry = session.entries[session.cycle.index]
         let picture = pictureOfChoice(session)
@@ -535,25 +544,40 @@ final class WindowSwitcherController {
     private func commit() {
         guard let session else { return }
         let entry = session.entries[session.cycle.index]
-        end()
+        let shown = previewHandoff.displayed
+        let keepsPreview = session.isRevealed && session.showsGhost && entry.window.id != nil
+            && shown?.window == entry.window.id && shown?.bounds == entry.bounds && shown?.picture != nil
+        let token = UUID()
+        if keepsPreview, let id = entry.window.id { exitingPreview = (id, token) }
+        end(keepingPreview: keepsPreview)
+        let activation = activationToken
 
         let window = entry.window.handle
         let held = WindowSwitcherController.milliseconds(since: session.began)
         Log.write("windows: \(session.presses) \(session.presses == 1 ? "press" : "presses") in \(held) ms"
                   + " — number \(session.cycle.index + 1) of \(session.entries.count), \(window.name)")
         window.bringForward()
+        if keepsPreview {
+            highlight.dismiss(canReveal: { window.isInFront }) { [weak self] in
+                guard let self, self.exitingPreview?.token == token else { return }
+                self.exitingPreview = nil
+                self.previews.end()
+            }
+        }
 
         // Rule 8. A window coming back from the Dock animates for most of half
         // a second, and would read as a failure well before it had finished
         // arriving.
         let settle: TimeInterval = entry.bounds == nil ? 0.6 : 0.2
-        DispatchQueue.main.asyncAfter(deadline: .now() + settle) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
+            guard let self, self.activationToken == activation, self.session == nil else { return }
             if window.isInFront {
                 Log.write("windows: \(window.name) is in front")
                 return
             }
             window.askToComeForward()
-            DispatchQueue.main.asyncAfter(deadline: .now() + settle) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
+                guard let self, self.activationToken == activation, self.session == nil else { return }
                 if window.isInFront {
                     Log.write("windows: \(window.name) is in front, at the second time of asking")
                 } else {
@@ -592,12 +616,16 @@ final class WindowSwitcherController {
     }
 
     /// Back to no session: no strip, no ⌥Esc or ⌥Q, nothing polling.
-    private func end() {
+    private func end(keepingPreview: Bool = false) {
+        activationToken = UUID()
         session = nil
         previewDeadline?.cancel(); previewDeadline = nil
         previewHandoff.reset()
-        previews.end()
-        highlight.hide()
+        if !keepingPreview {
+            exitingPreview = nil
+            previews.end()
+            highlight.hide()
+        }
         poll?.invalidate()
         poll = nil
         reveal?.cancel()

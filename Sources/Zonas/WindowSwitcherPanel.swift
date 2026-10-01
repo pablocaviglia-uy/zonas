@@ -371,11 +371,13 @@ final class WindowHighlight {
     /// reconfiguration, so a dictionary keyed by one grows an entry and a window
     /// every time a monitor is plugged in and never lets go of the old ones.
     private var windows: [CGDirectDisplayID: NSWindow] = [:]
+    private var dismissal: Timer?
 
     /// Rings a window, given its frame in CG coordinates, and puts `picture`
     /// inside the ring — `nil` for no permission, or for the moment before the
     /// first capture of this window has arrived.
     func show(_ frame: CGRect, picture: NSImage? = nil) {
+        dismissal?.invalidate(); dismissal = nil
         let cocoa = Coords.cgToCocoa(frame)
         let spotlight = Spotlight.isOn()
 
@@ -399,6 +401,7 @@ final class WindowHighlight {
             }
 
             let window = windows[display] ?? make(on: display)
+            window.alphaValue = 1
             window.setFrame(screen.frame, display: false)
             (window.contentView as? RingView)?.show(hole: hole,
                                                     picture: picture,
@@ -408,13 +411,45 @@ final class WindowHighlight {
     }
 
     func hide() {
+        dismissal?.invalidate(); dismissal = nil
         for window in windows.values {
             window.orderOut(nil)
+            window.alphaValue = 1
             // Or the next window ringed with no picture of its own — a different
             // application, as often as not — appears inside the last one's for as
             // long as it takes the first capture to arrive.
             (window.contentView as? RingView)?.forget()
         }
+    }
+
+    /// Keep the stream moving during dismissal without restarting its styling.
+    func updatePicture(_ picture: NSImage) {
+        for window in windows.values where window.isVisible {
+            (window.contentView as? RingView)?.updatePicture(picture)
+        }
+    }
+
+    func dismiss(canReveal: @escaping () -> Bool, completion: @escaping () -> Void) {
+        dismissal?.invalidate()
+        let began = DispatchTime.now()
+        var transition = PreviewDismissal()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            guard let self, self.dismissal === timer else { timer.invalidate(); return }
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000_000
+            let ready = elapsed >= PreviewDismissal.effectsDuration + PreviewDismissal.neutralDuration
+                && canReveal()
+            let appearance = transition.advance(elapsed: elapsed, windowIsReady: ready)
+            for window in self.windows.values where window.isVisible {
+                (window.contentView as? RingView)?.setEffectsOpacity(CGFloat(appearance.effects))
+                window.alphaValue = CGFloat(appearance.picture)
+            }
+            if appearance.isComplete {
+                self.hide()
+                completion()
+            }
+        }
+        dismissal = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func make(on display: CGDirectDisplayID) -> NSWindow {
@@ -444,8 +479,8 @@ final class RingView: NSView {
     ///
     /// Dimmer than the window itself, and washed with the accent colour, so
     /// that the ghost is never read as the window having already come forward.
-    /// The jump in brightness when ⌥ comes up and the real one arrives is what
-    /// says that it has.
+    /// On commit, the styling fades first and the picture returns to its source
+    /// colours before the real window is revealed underneath it.
     private static let fade: CGFloat = 0.78
 
     /// The window this ring is around, in this view's coordinates.
@@ -457,20 +492,34 @@ final class RingView: NSView {
     /// Whether the rest of the screen is pushed back. Off, this view draws what
     /// it drew before the spotlight existed: a ring, and nothing else.
     private var spotlight = true
+    private var effectsOpacity: CGFloat = 1
 
     func show(hole: CGRect, picture: NSImage?, spotlight: Bool) {
-        guard hole != self.hole || picture !== self.picture || spotlight != self.spotlight else {
+        guard hole != self.hole || picture !== self.picture || spotlight != self.spotlight
+                || effectsOpacity != 1 else {
             return
         }
         self.hole = hole
         self.picture = picture
         self.spotlight = spotlight
+        effectsOpacity = 1
+        needsDisplay = true
+    }
+
+    func updatePicture(_ picture: NSImage) {
+        self.picture = picture
+        needsDisplay = true
+    }
+
+    func setEffectsOpacity(_ opacity: CGFloat) {
+        effectsOpacity = min(1, max(0, opacity))
         needsDisplay = true
     }
 
     func forget() {
         picture = nil
         hole = .zero
+        effectsOpacity = 1
         needsDisplay = true
     }
 
@@ -482,7 +531,7 @@ final class RingView: NSView {
         let ring = NSBezierPath(roundedRect: hole.insetBy(dx: -2.5, dy: -2.5),
                                 xRadius: 14, yRadius: 14)
 
-        if spotlight {
+        if spotlight && effectsOpacity > 0 {
             drawScrim(cutting: onThisScreen ? hole : nil)
             if onThisScreen { drawGuides() }
         }
@@ -493,9 +542,11 @@ final class RingView: NSView {
         // Over the picture, and lighter when there is one: the wash is what
         // keeps a ringed window the accent colour rather than just a dimmed
         // one, and at 0.12 over a picture it tinted the whole thing blue.
-        NSColor.controlAccentColor.withAlphaComponent(picture == nil ? 0.12 : 0.08).setFill()
-        ring.fill()
-        drawRing(ring)
+        if effectsOpacity > 0 {
+            NSColor.controlAccentColor.withAlphaComponent((picture == nil ? 0.12 : 0.08) * effectsOpacity).setFill()
+            ring.fill()
+            drawRing(ring)
+        }
     }
 
     /// Everything that is not the chosen window, pushed back.
@@ -514,7 +565,7 @@ final class RingView: NSView {
             scrim.append(NSBezierPath(roundedRect: hole, xRadius: 12, yRadius: 12))
             scrim.windingRule = .evenOdd
         }
-        NSColor.black.withAlphaComponent(Spotlight.dim).setFill()
+        NSColor.black.withAlphaComponent(Spotlight.dim * effectsOpacity).setFill()
         scrim.fill()
     }
 
@@ -532,7 +583,7 @@ final class RingView: NSView {
         outside.windingRule = .evenOdd
         outside.addClip()
 
-        NSColor.controlAccentColor.withAlphaComponent(Spotlight.guideAlpha).setFill()
+        NSColor.controlAccentColor.withAlphaComponent(Spotlight.guideAlpha * effectsOpacity).setFill()
         for line in Spotlight.guides(around: hole, in: bounds) {
             line.fill()
         }
@@ -552,12 +603,12 @@ final class RingView: NSView {
     private func drawRing(_ ring: NSBezierPath) {
         NSGraphicsContext.saveGraphicsState()
         let glow = NSShadow()
-        glow.shadowColor = NSColor.controlAccentColor.withAlphaComponent(0.85)
+        glow.shadowColor = NSColor.controlAccentColor.withAlphaComponent(0.85 * effectsOpacity)
         glow.shadowBlurRadius = 22
         glow.shadowOffset = .zero
         glow.set()
 
-        NSColor.controlAccentColor.setStroke()
+        NSColor.controlAccentColor.withAlphaComponent(effectsOpacity).setStroke()
         ring.lineWidth = 5
         ring.stroke()
         ring.stroke()
@@ -576,7 +627,10 @@ final class RingView: NSView {
     /// or two old and a window resized since would otherwise be stretched.
     private func drawGhost(_ picture: NSImage, in ring: NSBezierPath) {
         NSGraphicsContext.saveGraphicsState()
-        ring.addClip()
+        // Do not leave the ring's enlarged black footprint around the neutral
+        // image after its blue border is gone.
+        let imageShape = NSBezierPath(roundedRect: hole, xRadius: 12, yRadius: 12)
+        imageShape.addClip()
         // **Opaque, and that is the measurement in this view.** The obvious
         // version is the picture at some alpha straight over what is already
         // there, and the case this ring exists for is the case where that is
@@ -588,11 +642,12 @@ final class RingView: NSView {
         // over the whole ring was 2 levels, which is why a mean is not what
         // settled it.
         NSColor.black.setFill()
-        ring.fill()
+        imageShape.fill()
         let size = WindowSwitcher.fit(picture.size, into: hole.size, enlarging: true)
         picture.draw(in: NSRect(x: hole.midX - size.width / 2, y: hole.midY - size.height / 2,
                                width: size.width, height: size.height),
-                     from: .zero, operation: .sourceOver, fraction: RingView.fade)
+                     from: .zero, operation: .sourceOver,
+                     fraction: 1 - (1 - RingView.fade) * effectsOpacity)
         NSGraphicsContext.restoreGraphicsState()
     }
 }
