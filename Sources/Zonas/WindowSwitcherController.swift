@@ -898,7 +898,7 @@ final class WindowSwitcherController {
                 let screen = NSScreen.containing(cgPoint: CGPoint(x: bounds.midX, y: bounds.midY))
                 switch screen.map({ WindowSwitcher.place(of: bounds, in: layout, area: $0.cgVisibleFrame) }) {
                 case .zones(let indices)?:
-                    place = indices.map { layout.zones[$0].name }.joined(separator: " + ")
+                    place = WindowSwitcher.zoneLabel(indices.map { layout.zones[$0] })
                     zone = place
                 case .wholeScreen?:
                     place = "Whole Screen"

@@ -2535,6 +2535,17 @@ permissions were verified. The switcher's 43 tests passed. Visual confirmation
 of the corrected full-window video remains a separate check; startup and unit
 tests do not establish that result.
 
+### Shorter switcher labels for complete columns and rows — 2026-10-02
+
+A full left column previously read `Izquierda Arriba + Izquierda Abajo`, even
+though it was one window occupying the column. The switcher's label and detail
+now use the zones' shared complete-word prefix (`Izquierda`, and `Derecha` for
+`Derecha 3 + Derecha 4`) when their normalized hit regions tile a complete
+column or row. Window-frame gaps do not affect this check. Partial spans, gaps,
+overlaps, differing widths/heights and unrelated names retain the explicit
+combination. Single-zone labels stay verbatim. This changes presentation only;
+the layout file, snapping and `Layout.union(of:)` keep the original zone names.
+
 ### Stage 5 — The visual editor · 12 days
 
 | Piece | Days |

@@ -319,6 +319,74 @@ struct WindowSwitcherLabelTests {
         #expect(WindowSwitcher.place(of: column, in: layout, area: ultrawide) == .zones([0, 1]))
     }
 
+    @Test("Complete columns use their shared name")
+    func completeColumnLabels() {
+        #expect(WindowSwitcher.zoneLabel([layout.zones[0], layout.zones[1]]) == "Izquierda")
+        #expect(WindowSwitcher.zoneLabel([layout.zones[3], layout.zones[4]]) == "Derecha")
+        #expect(WindowSwitcher.zoneLabel([layout.zones[1], layout.zones[0]]) == "Izquierda")
+    }
+
+    @Test("Single-zone labels preserve the whole custom name")
+    func singleZoneLabels() {
+        #expect(WindowSwitcher.zoneLabel([layout.zones[0]]) == "Izquierda Arriba")
+        let custom = Zone(name: "  Project Board 👷  ", x: 0, y: 0, width: 1, height: 1)
+        #expect(WindowSwitcher.zoneLabel([custom]) == "  Project Board 👷  ")
+    }
+
+    @Test("Complete rows can share a name with several words")
+    func completeRowLabels() {
+        let row = [
+            Zone(name: "Top Work Left", x: 0, y: 0, width: 0.4, height: 0.5),
+            Zone(name: "Top Work Right", x: 0.4, y: 0, width: 0.6, height: 0.5),
+        ]
+        #expect(WindowSwitcher.zoneLabel(row) == "Top Work")
+    }
+
+    @Test("Incomplete or overlapping columns keep both zone names")
+    func incompleteColumnLabels() {
+        let top = Zone(name: "Left Top", x: 0, y: 0, width: 0.25, height: 0.5)
+        let bottoms = [
+            Zone(name: "Left Bottom", x: 0, y: 0.5, width: 0.25, height: 0.4),
+            Zone(name: "Left Bottom", x: 0, y: 0.6, width: 0.25, height: 0.4),
+            Zone(name: "Left Bottom", x: 0, y: 0.4, width: 0.25, height: 0.6),
+            Zone(name: "Left Bottom", x: 0, y: 0.5, width: 0.3, height: 0.5),
+            Zone(name: "Left Bottom", x: 0.1, y: 0.5, width: 0.25, height: 0.5),
+        ]
+        for bottom in bottoms {
+            #expect(WindowSwitcher.zoneLabel([top, bottom]) == "Left Top + Left Bottom")
+        }
+    }
+
+    @Test("Rows with different heights keep both zone names")
+    func mismatchedRowLabels() {
+        let row = [
+            Zone(name: "Top Left", x: 0, y: 0, width: 0.5, height: 0.5),
+            Zone(name: "Top Right", x: 0.5, y: 0, width: 0.5, height: 0.6),
+        ]
+        #expect(WindowSwitcher.zoneLabel(row) == "Top Left + Top Right")
+    }
+
+    @Test("Shared name prefixes end at a word boundary")
+    func wholeWordPrefixes() {
+        let top = Zone(name: "Left Top", x: 0, y: 0, width: 0.25, height: 0.5)
+        let similar = Zone(name: "Leftover Bottom", x: 0, y: 0.5, width: 0.25, height: 0.5)
+        let unrelated = Zone(name: "Mail", x: 0, y: 0.5, width: 0.25, height: 0.5)
+        #expect(WindowSwitcher.zoneLabel([top, similar]) == "Left Top + Leftover Bottom")
+        #expect(WindowSwitcher.zoneLabel([top, unrelated]) == "Left Top + Mail")
+    }
+
+    @Test("A three-zone column is shortened only when all its parts are present")
+    func threePartColumnLabels() {
+        let column = [
+            Zone(name: "Side One", x: 0, y: 0, width: 0.25, height: 0.333333),
+            Zone(name: "Side Two", x: 0, y: 0.333333, width: 0.25, height: 0.333333),
+            Zone(name: "Side Three", x: 0, y: 0.666666, width: 0.25, height: 0.333334),
+        ]
+        #expect(WindowSwitcher.zoneLabel(column) == "Side")
+        #expect(WindowSwitcher.zoneLabel(Array(column.prefix(2))) == "Side One + Side Two")
+        #expect(WindowSwitcher.zoneLabel([column[2], column[0]]) == "Side Three + Side One")
+    }
+
     /// The reason this is not `zoneIndex(holding:)`: Finder's "Downloads",
     /// sitting over the middle column, is not in it.
     @Test("A floating window over a zone is floating")

@@ -301,6 +301,10 @@ the chosen window's title, its application, where it is, and the screen, when
 that is not the one the strip is on. Minimized windows and hidden applications'
 windows come last, faded, and choosing one brings it back.
 
+A window spanning a complete column or row uses its zones' shared name:
+`Izquierda Arriba` + `Izquierda Abajo` becomes `Izquierda`. Individual zones
+keep their exact names, and combinations without a shared name remain explicit.
+
 The order is the order you last used them in, so **a single tap of ⌥Tab goes
 back to the window you were just in**, and a second tap brings you back again.
 A quick tap never shows the strip at all; held, it appears after 130 ms.

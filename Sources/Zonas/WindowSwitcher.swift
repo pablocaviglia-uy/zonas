@@ -278,6 +278,42 @@ enum WindowSwitcher {
         rect.isNull || rect.isEmpty ? 0 : Double(rect.width * rect.height)
     }
 
+    /// A full column such as "Izquierda Arriba" + "Izquierda Abajo" should
+    /// read as "Izquierda". The shared words come from the user's own names;
+    /// geometry prevents a partial or disconnected selection inheriting them.
+    static func zoneLabel(_ zones: [Zone]) -> String {
+        let full = zones.map(\.name).joined(separator: " + ")
+        guard zones.count > 1 else { return full }
+
+        // Hit regions tile edge to edge; window frames intentionally have gaps.
+        // Normalized geometry also keeps the label identical on every display.
+        func tiles(_ start: KeyPath<Zone, Double>, _ size: KeyPath<Zone, Double>,
+                   across: KeyPath<Zone, Double>, breadth: KeyPath<Zone, Double>) -> Bool {
+            let tolerance = 0.000_001
+            let first = zones[0]
+            guard zones.allSatisfy({
+                abs($0[keyPath: across] - first[keyPath: across]) < tolerance
+                    && abs($0[keyPath: breadth] - first[keyPath: breadth]) < tolerance
+                    && $0[keyPath: size] > 0 && $0[keyPath: breadth] > 0
+            }) else { return false }
+            var edge = 0.0
+            for zone in zones.sorted(by: { $0[keyPath: start] < $1[keyPath: start] }) {
+                guard abs(zone[keyPath: start] - edge) < tolerance else { return false }
+                edge = zone[keyPath: start] + zone[keyPath: size]
+            }
+            return abs(edge - 1) < tolerance
+        }
+        guard tiles(\.y, \.height, across: \.x, breadth: \.width)
+                || tiles(\.x, \.width, across: \.y, breadth: \.height) else { return full }
+
+        var shared = zones[0].name.split(whereSeparator: \.isWhitespace)
+        for zone in zones.dropFirst() {
+            let words = zone.name.split(whereSeparator: \.isWhitespace)
+            while !shared.isEmpty && !words.starts(with: shared) { shared.removeLast() }
+        }
+        return shared.isEmpty ? full : shared.joined(separator: " ")
+    }
+
     // MARK: - How it is laid out
 
     /// How wide each window's cell in the strip is, and how many are shown.
