@@ -8,7 +8,7 @@ final class SwitcherWindowCache<Key: Hashable, Value> {
     private var values: [Key: Value] = [:]
     private var requests: [Key: DispatchGroup] = [:]
 
-    func request(_ key: Key, read: @escaping () -> Value?) -> DispatchGroup {
+    func request(_ key: Key, qos: DispatchQoS.QoSClass = .userInitiated, read: @escaping () -> Value?) -> DispatchGroup {
         lock.lock()
         if let existing = requests[key] {
             lock.unlock()
@@ -18,7 +18,7 @@ final class SwitcherWindowCache<Key: Hashable, Value> {
         completion.enter()
         requests[key] = completion
         lock.unlock()
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: qos).async {
             let value = read()
             self.lock.lock()
             if let value { self.values[key] = value }

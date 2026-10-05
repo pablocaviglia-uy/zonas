@@ -324,6 +324,12 @@ accent effects over it. Only the selected window streams, at up to 30 frames
 per second. Capture stops after the chosen window's visual handoff, or immediately
 when the switcher is cancelled.
 
+While the switcher is idle, a bounded background pass refreshes window metadata
+and prepares one likely next capture stream without starting it or recording
+pictures. This reduces setup after a pause; sleep and disabling the switcher
+cancel preparation. Current window order and geometry are checked on every
+opening, and old pictures still expire after two seconds.
+
 Moving through the carousel keeps the previous live preview visible until the
 next window's first frame arrives, then changes its picture and position
 together. Recent frames are reused during the same switcher session. If capture

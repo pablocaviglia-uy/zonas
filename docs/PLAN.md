@@ -2623,6 +2623,63 @@ iteration has no new user-driven opening sample yet. The published 0.8.6 bundle
 and first trial were backed up for recovery. Pablo accepted the installed trial
 and authorized the 0.8.7 production release on 2026-10-05.
 
+### Readiness after idle — 2026-10-05
+
+Pablo accepted the 0.8.7 trial, then reported that the first switch after a pause
+still felt slower. The installed log exposed two separate costs: openings could
+spend 78–81 ms waiting for AX, including an unanswered Godot process with no
+usable metadata, and one cold stream construction took 87 ms. Other pauses had
+fast constructors but slow first frames. This is not evidence of App Nap, and
+this change does not disable system sleep or request a permanent activity.
+
+An opening with known visible IDs now gives AX up to 8 ms to refresh instead of
+waiting 80 ms for every process. Current WindowServer order and bounds remain
+authoritative. New visible windows, freshly launched unknown owners and hidden
+or minimized candidates retain the normal discovery budget; truly empty cache
+still gets its initial bounded read. An old unanswered owner with no visible or
+hidden window continues refreshing without delaying known entries. Inventory
+joins now include PID as well as window ID, so cached handles cannot be lent to
+another owner when an ID is reused.
+
+Idle preparation runs every 20 seconds with 5 seconds of tolerance, at utility
+priority. Launch, termination, activation, display changes and wake coalesce
+into a pass after 250 ms. Disable and sleep cancel pending work. A stale worker
+still occupies its physical slot until returning, and its token rejects the
+result. Neither the hidden panel nor preparation is changed during an opening,
+a visible session or the final preview handoff.
+
+When the window-position preview is enabled, preparation also constructs one
+likely next stream without calling startCapture or taking screenshots. A gesture
+can consume it exactly once, only for the same window ID, PID and full rectangle.
+Pending construction is cancelled on opening; a mismatching or expired ready
+stream is discarded. A stream that has already captured is never put back into
+standby. Renewal starts once the object is 15 seconds old, retaining it until
+its replacement is ready; each object still expires at 30 seconds. There is at
+most one ready object and one logical pending preparation. Native picture reuse
+still expires after two seconds, rather than displaying an old image after idle.
+
+The log separates Carbon event delivery, prior opening gap, AX budget, delivery
+back to the main queue, target lookup, constructor/worker/adoption costs, and
+capture startup. Standby removes avoidable setup; macOS compositor startup can
+still be slow, so readiness is not an unconditional latency guarantee.
+
+Validation: 503 tests in 69 suites passed. The new cases cover inventory
+ownership/discovery budgets, idle cancellation and coalescing, and single-use
+standby geometry, expiry, replacement and renewal. The existing handoff and
+frame-cache tests also pass. Pablo accepted the installed trial and authorized
+the 0.8.8 production release on 2026-10-05.
+
+The signed trial was installed with its previous public bundle backed up and
+its designated requirement unchanged. Its own startup retained Accessibility,
+Screen Recording and login registration. Runtime prepared the first standby
+without capture (71 ms constructor work), reused it on the next user-driven
+gesture, and revealed the list in 80 ms. A later idle pass renewed standby in
+1 ms without starting capture. Another quick gesture spent 88 ms inside
+WindowServer and committed in 142 ms despite its 8 ms AX budget; the new
+instrumentation exposes that remaining system-query outlier rather than calling
+the entire path constant-time. Long idle behavior still needs user-driven
+samples; this does not claim parity with the native macOS switcher.
+
 ### Stage 5 — The visual editor · 12 days
 
 | Piece | Days |

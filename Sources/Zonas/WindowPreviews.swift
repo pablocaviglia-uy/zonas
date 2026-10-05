@@ -108,6 +108,9 @@ final class WindowPreviews {
     /// ownership and geometry against which that frame is validated.
     func begin(windows: Set<CGWindowID>, owners: [CGWindowID: pid_t], identities: [CGWindowID: PreviewFrameIdentity]) {
         cacheExpiry?.cancel(); cacheExpiry = nil
+        // An opening never waits for speculative construction to finish.
+        // A completed, unstarted stream is validated against this census later.
+        if standbyRequested != nil { cancelStandbyPreparation() }
         captureGeneration = UUID()
         pendingPrefetch?.cancel(); pendingPrefetch = nil
         stillRequests.removeAll()
@@ -149,6 +152,7 @@ final class WindowPreviews {
     }
 
     func end() {
+        invalidateStandby()
         captureGeneration = UUID()
         pendingPrefetch?.cancel(); pendingPrefetch = nil
         nativeWork.cancelPending()
@@ -217,6 +221,15 @@ final class WindowPreviews {
     private var liveWindow: CGWindowID?
     private var streamGeneration = UUID()
     private var failedWindow: CGWindowID?
+    private var standby = PreviewStandbyCache<PreparedLiveStream>()
+    private var standbyRequested: PreviewStandbyIdentity?
+    private var standbyPreparation: Task<PreparedLiveStream, Error>?
+    private var standbyToken = UUID()
+    private var standbyReadyToken = UUID()
+    private var standbyExpiry: DispatchWorkItem?
+    private var standbyPendingExpiry: DispatchWorkItem?
+    private static let standbyMaximumAge: TimeInterval = 30
+    private static let standbyRenewAfter: TimeInterval = 15
     // Apple describes CIContext as heavyweight and recommends reusing it. A
     // fresh context and output queue for every Tab threw that preparation away.
     private let conversionContext = CIContext()
@@ -245,12 +258,119 @@ final class WindowPreviews {
         if let old { Task { try? await old.stopCapture() } }
     }
 
+    /// Build one likely next stream while idle, without starting capture or
+    /// creating a screenshot. Apple separates stream construction from capture;
+    /// this moves constructor cost away from the gesture, not compositor startup.
+    func prepareStandby(window: CGWindowID, owner: pid_t, bounds: CGRect) {
+        let identity = PreviewStandbyIdentity(window: window, owner: owner, bounds: bounds)
+        guard identity.isValid, windows.isEmpty, liveWindow == nil,
+              Self.isAllowed, Self.isInRing() else {
+            invalidateStandby()
+            return
+        }
+        if let pending = standbyRequested, pending != identity { cancelStandbyPreparation() }
+        if let age = standby.age(of: identity, now: Self.now), age < Self.standbyRenewAfter { return }
+        guard standbyRequested != identity else { return }
+        // Keep the last ready stream while its replacement is prepared. Its
+        // original expiry still applies, and an opening cancels only the worker.
+        cancelStandbyPreparation()
+        let token = standbyToken
+        standbyRequested = identity
+        let pendingExpiry = DispatchWorkItem { [weak self] in
+            guard let self, self.standbyToken == token else { return }
+            self.cancelStandbyPreparation()
+        }
+        standbyPendingExpiry = pendingExpiry
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.standbyMaximumAge, execute: pendingExpiry)
+        Task { @MainActor in
+            let lookupBegan = Self.now
+            let target = await self.target(window, owner: owner)
+            guard self.canPrepareStandby(identity, token: token) else { return }
+            guard let target else { self.cancelStandbyPreparation(); return }
+            let lookupMS = Int((Self.now - lookupBegan) * 1000)
+            let context = self.conversionContext
+            let queue = self.outputQueue
+            let queuedAt = Self.now
+            let preparation = Task.detached(priority: .utility) {
+                try Self.prepareLiveStream(target, size: bounds.size, context: context,
+                                           queue: queue, queuedAt: queuedAt)
+            }
+            self.standbyPreparation = preparation
+            do {
+                let prepared = try await preparation.value
+                guard self.canPrepareStandby(identity, token: token),
+                      Self.now - prepared.completedAt <= Self.standbyMaximumAge else {
+                    prepared.output.invalidate()
+                    return
+                }
+                self.cancelStandbyPreparation()
+                self.standby.store(prepared, identity: identity, preparedAt: prepared.completedAt)?.output.invalidate()
+                self.standbyReadyToken = UUID()
+                self.expireStandby(token: self.standbyReadyToken,
+                                   after: Self.standbyMaximumAge - (Self.now - prepared.completedAt))
+                Log.write("windows: live preview standby ready for \(window) without capture"
+                          + " (lookup \(lookupMS) ms, worker queue \(prepared.queuedMS) ms, constructors \(prepared.milliseconds) ms)")
+            } catch {
+                guard self.standbyToken == token else { return }
+                self.cancelStandbyPreparation()
+                if !(error is CancellationError) {
+                    Log.write("windows: live preview standby preparation failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    /// Disable, wake and display changes invalidate speculative metadata too.
+    /// No started stream is ever returned to this single-consumption slot.
+    func invalidateStandby() {
+        cancelStandbyPreparation()
+        standbyReadyToken = UUID()
+        standby.remove()?.output.invalidate()
+        standbyExpiry?.cancel(); standbyExpiry = nil
+    }
+
+    private func cancelStandbyPreparation() {
+        standbyToken = UUID()
+        standbyPreparation?.cancel(); standbyPreparation = nil
+        standbyRequested = nil
+        standbyPendingExpiry?.cancel(); standbyPendingExpiry = nil
+    }
+
+    private func canPrepareStandby(_ identity: PreviewStandbyIdentity, token: UUID) -> Bool {
+        standbyToken == token && standbyRequested == identity && windows.isEmpty && liveWindow == nil
+            && Self.isAllowed && Self.isInRing()
+    }
+
+    private func expireStandby(token: UUID, after interval: TimeInterval) {
+        standbyExpiry?.cancel()
+        let expiry = DispatchWorkItem { [weak self] in
+            guard let self, self.standbyReadyToken == token else { return }
+            self.standby.remove()?.output.invalidate()
+            self.standbyReadyToken = UUID()
+            self.standbyExpiry = nil
+        }
+        standbyExpiry = expiry
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, interval), execute: expiry)
+    }
+
     /// Only the selected window streams. A native still wins the cold-start
     /// race when it can; a newer live frame always wins over that still.
-    func stream(_ window: CGWindowID, size: CGSize,
+    func stream(_ window: CGWindowID, bounds: CGRect,
                 then update: @escaping () -> Void) {
+        let size = bounds.size
+        let standbyIdentity = PreviewStandbyIdentity(window: window, owner: owners[window] ?? 0, bounds: bounds)
         guard liveWindow != window, let identity = identities[window], identity.size == size,
-              size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else { return }
+              standbyIdentity.isValid else { return }
+        let consumed = standby.take(matching: standbyIdentity, now: Self.now, maximumAge: Self.standbyMaximumAge)
+        let ready: PreparedLiveStream?
+        if let consumed, consumed.matches {
+            ready = consumed.value
+            Log.write("windows: live preview standby reused for \(window)")
+        } else {
+            consumed?.value.output.invalidate()
+            ready = nil
+        }
+        invalidateStandby()
         stopStream()
         liveWindow = window
         let generation = streamGeneration
@@ -264,18 +384,9 @@ final class WindowPreviews {
             }
         }
         Task { @MainActor in
-            let target = await self.target(window, owner: identity.owner)
-            guard self.streamGeneration == generation, self.identities[window] == identity else { return }
-            guard let target else {
-                self.failedWindow = window
-                self.liveWindow = nil
-                Log.write("windows: live preview unavailable for window \(window)")
-                update()
-                return
-            }
             let deliver: (CGImage) -> Void = { [weak self] image in
                 guard let self, self.streamGeneration == generation,
-                      self.identities[window] == identity else { return }
+                      self.identities[window] == identity, self.owners[window] == identity.owner else { return }
                 if firstFrame {
                     firstFrame = false
                     Log.write("windows: live preview first frame for \(window) after \(Int((Self.now - began) * 1000)) ms")
@@ -286,28 +397,57 @@ final class WindowPreviews {
                                         identity: identity, capturedAt: Self.now)
                 update()
             }
-            let context = self.conversionContext
-            let queue = self.outputQueue
-            let preparation = Task.detached(priority: .userInitiated) {
-                try Self.prepareLiveStream(target, size: size, context: context,
-                                           queue: queue, deliver: deliver)
-            }
-            self.streamPreparation = preparation
             do {
-                let prepared = try await preparation.value
+                let prepared: PreparedLiveStream
+                if let ready { prepared = ready }
+                else {
+                    let lookupBegan = Self.now
+                    let cachedTarget = self.listed?.windows.contains {
+                        $0.windowID == window && $0.owningApplication?.processID == identity.owner
+                    } ?? false
+                    let target = await self.target(window, owner: identity.owner)
+                    guard self.streamGeneration == generation, self.identities[window] == identity else { return }
+                    Log.write("windows: live preview lookup for \(window) in \(Int((Self.now - lookupBegan) * 1000)) ms"
+                              + " (main queue \(Int((lookupBegan - began) * 1000)) ms, \(cachedTarget ? "cached" : "refreshed") metadata)")
+                    guard let target else {
+                        self.failedWindow = window
+                        self.liveWindow = nil
+                        Log.write("windows: live preview unavailable for window \(window)")
+                        update()
+                        return
+                    }
+                    let context = self.conversionContext
+                    let queue = self.outputQueue
+                    let queuedAt = Self.now
+                    let preparation = Task.detached(priority: .userInitiated) {
+                        try Self.prepareLiveStream(target, size: size, context: context,
+                                                   queue: queue, queuedAt: queuedAt)
+                    }
+                    self.streamPreparation = preparation
+                    prepared = try await preparation.value
+                }
                 guard self.streamGeneration == generation, self.identities[window] == identity,
                       self.owners[window] == identity.owner else {
                     prepared.output.invalidate()
                     return
                 }
                 self.streamPreparation = nil
-                Log.write("windows: live preview prepared for \(window) off the main thread in \(prepared.milliseconds) ms")
+                prepared.output.arm(deliver)
+                if ready == nil {
+                    Log.write("windows: live preview prepared for \(window) off the main thread in \(prepared.milliseconds) ms"
+                              + " (worker queue \(prepared.queuedMS) ms, adoption \(Int((Self.now - prepared.completedAt) * 1000)) ms,"
+                              + " filter \(prepared.filterMS) ms, config \(prepared.configMS) ms,"
+                              + " stream \(prepared.streamMS) ms, output \(prepared.outputMS) ms)")
+                }
                 self.liveStream = prepared.stream
                 self.liveOutput = prepared.output
+                let starting = Self.now
                 try await prepared.stream.startCapture()
                 if self.streamGeneration != generation {
                     prepared.output.invalidate()
                     try? await prepared.stream.stopCapture()
+                } else {
+                    Log.write("windows: live preview startCapture completed for \(window) in \(Int((Self.now - starting) * 1000)) ms")
                 }
             } catch is CancellationError {
                 // Moving past a window is cancellation, not capture failure.
@@ -326,6 +466,12 @@ final class WindowPreviews {
         let stream: SCStream
         let output: LivePreviewOutput
         let milliseconds: Int
+        let queuedMS: Int
+        let filterMS: Int
+        let configMS: Int
+        let streamMS: Int
+        let outputMS: Int
+        let completedAt: TimeInterval
     }
 
     /// ScreenCaptureKit's constructors/registering an output do synchronous
@@ -333,12 +479,13 @@ final class WindowPreviews {
     /// the SDK, and each object is transferred exclusively after preparation.
     /// AppKit state and frame delivery still belong to the main thread.
     private static func prepareLiveStream(_ target: SCWindow, size: CGSize, context: CIContext,
-                                          queue: DispatchQueue, deliver: @escaping (CGImage) -> Void) throws -> PreparedLiveStream {
+                                          queue: DispatchQueue, queuedAt: TimeInterval) throws -> PreparedLiveStream {
         try Task.checkCancellation()
         let began = Self.now
         let filter = SCContentFilter(desktopIndependentWindow: target)
         try Task.checkCancellation()
         let scale = CGFloat(filter.pointPixelScale)
+        let configuredAt = Self.now
         let config = SCStreamConfiguration()
         config.width = max(1, Int(size.width * scale))
         config.height = max(1, Int(size.height * scale))
@@ -349,12 +496,21 @@ final class WindowPreviews {
         config.queueDepth = 3
         config.showsCursor = false
         config.ignoreShadowsSingleWindow = true
-        let output = LivePreviewOutput(context: context, deliver: deliver)
+        let output = LivePreviewOutput(context: context)
+        let streamBegan = Self.now
         let stream = SCStream(filter: filter, configuration: config, delegate: nil)
         try Task.checkCancellation()
+        let outputBegan = Self.now
         try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: queue)
+        let completedAt = Self.now
         return PreparedLiveStream(stream: stream, output: output,
-                                  milliseconds: Int((Self.now - began) * 1000))
+                                  milliseconds: Int((completedAt - began) * 1000),
+                                  queuedMS: Int((began - queuedAt) * 1000),
+                                  filterMS: Int((configuredAt - began) * 1000),
+                                  configMS: Int((streamBegan - configuredAt) * 1000),
+                                  streamMS: Int((outputBegan - streamBegan) * 1000),
+                                  outputMS: Int((completedAt - outputBegan) * 1000),
+                                  completedAt: completedAt)
     }
 
     /// Only a neighbor of the explicit current gesture is captured. Delay its
@@ -423,12 +579,15 @@ final class WindowPreviews {
         let identity = request.identity
         let ticket = PreviewCaptureTicket(session: request.session, request: request.token,
                                           window: window, owner: identity.owner, identity: identity)
+        let submittedAt = Self.now
         Task(priority: request.isPrefetch ? .utility : .userInitiated) { @MainActor in
             defer {
                 self.nativeWork.finish(request.token)
                 self.startQueuedNative()
             }
+            let lookupBegan = Self.now
             let target = await self.target(window, owner: identity.owner)
+            let lookupMS = Int((Self.now - lookupBegan) * 1000)
             guard ticket.isCurrent(session: self.captureGeneration, request: self.nativeRequests[window]?.token,
                                    windows: self.windows, owners: self.owners, identities: self.identities) else { return }
             // A slot may have been occupied only by shareable-content lookup;
@@ -443,17 +602,24 @@ final class WindowPreviews {
                 request.callbacks.forEach { $0(picture) }
                 return
             }
-            let captured: (NSImage, Int)?
+            let captured: NativeCapture?
             if let target { captured = await Self.takeNative(target, size: identity.size) }
             else { captured = nil }
             guard ticket.isCurrent(session: self.captureGeneration, request: self.nativeRequests[window]?.token,
                                    windows: self.windows, owners: self.owners, identities: self.identities) else { return }
             self.nativeRequests.removeValue(forKey: window)
-            if let captured, self.liveRevisions[window, default: 0] == request.revision {
-                self.livePictures.store(captured.0, for: window, bytes: captured.1,
-                                        identity: identity, capturedAt: Self.now)
+            if let captured {
+                let newerLiveFrame = self.liveRevisions[window, default: 0] != request.revision
+                if !newerLiveFrame {
+                    self.livePictures.store(captured.picture, for: window, bytes: captured.bytes,
+                                            identity: identity, capturedAt: Self.now)
+                }
                 let kind = request.isPrefetch ? "prefetch" : "fallback"
-                Log.write("windows: native preview \(kind) for \(window) after \(Int((Self.now - request.began) * 1000)) ms")
+                Log.write("windows: native preview \(kind) for \(window) after \(Int((Self.now - request.began) * 1000)) ms"
+                          + " (scheduler \(Int((submittedAt - request.began) * 1000)) ms,"
+                          + " main queue \(Int((lookupBegan - submittedAt) * 1000)) ms, lookup \(lookupMS) ms,"
+                          + " setup \(captured.setupMS) ms, captureImage \(captured.captureMS) ms"
+                          + (newerLiveFrame ? ", newer live frame kept)" : ")"))
             }
             let picture = self.livePicture(of: window)
             request.callbacks.forEach { $0(picture) }
@@ -472,7 +638,15 @@ final class WindowPreviews {
         return target
     }
 
-    private static func takeNative(_ window: SCWindow, size: CGSize) async -> (NSImage, Int)? {
+    private struct NativeCapture {
+        let picture: NSImage
+        let bytes: Int
+        let setupMS: Int
+        let captureMS: Int
+    }
+
+    private static func takeNative(_ window: SCWindow, size: CGSize) async -> NativeCapture? {
+        let began = Self.now
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let config = SCStreamConfiguration()
         config.width = max(1, Int(size.width * CGFloat(filter.pointPixelScale)))
@@ -480,8 +654,10 @@ final class WindowPreviews {
         config.scalesToFit = true
         config.showsCursor = false
         config.ignoreShadowsSingleWindow = true
+        let captureBegan = Self.now
         guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) else { return nil }
-        return (NSImage(cgImage: image, size: size), image.bytesPerRow * image.height)
+        return NativeCapture(picture: NSImage(cgImage: image, size: size), bytes: image.bytesPerRow * image.height,
+                             setupMS: Int((captureBegan - began) * 1000), captureMS: Int((Self.now - captureBegan) * 1000))
     }
 
     private static func take(_ window: SCWindow, size windowSize: CGSize,
@@ -506,12 +682,15 @@ final class WindowPreviews {
 /// Convert frames away from the main thread; AppKit drawing stays on it.
 private final class LivePreviewOutput: NSObject, SCStreamOutput {
     private let context: CIContext
-    private let deliver: (CGImage) -> Void
+    private var deliver: ((CGImage) -> Void)?
     private let frames = PreviewLatestFrame<CGImage>()
 
-    init(context: CIContext, deliver: @escaping (CGImage) -> Void) {
-        self.context = context; self.deliver = deliver
-    }
+    init(context: CIContext) { self.context = context }
+
+    /// An unstarted standby cannot carry a previous gesture's delivery closure.
+    /// Arming and eventual delivery both happen on the main thread.
+    @MainActor
+    func arm(_ deliver: @escaping (CGImage) -> Void) { self.deliver = deliver }
 
     func invalidate() { frames.invalidate() }
 
@@ -527,7 +706,7 @@ private final class LivePreviewOutput: NSObject, SCStreamOutput {
         guard let image = context.createCGImage(frame, from: frame.extent), frames.offer(image) else { return }
         DispatchQueue.main.async {
             guard let image = self.frames.take() else { return }
-            self.deliver(image)
+            self.deliver?(image)
         }
     }
 }
@@ -633,5 +812,74 @@ struct PreviewNativeWorkQueue {
         let cancelled = [selected, neighbor].compactMap { $0 }
         selected = nil; neighbor = nil
         return cancelled
+    }
+}
+
+/// A prepared stream belongs to one exact census entry. Bounds include position:
+/// moving between displays can change source scale even when the size matches.
+struct PreviewStandbyIdentity: Equatable {
+    let window: CGWindowID
+    let owner: pid_t
+    let bounds: CGRect
+
+    var isValid: Bool {
+        window != kCGNullWindowID && owner > 0
+            && bounds.origin.x.isFinite && bounds.origin.y.isFinite
+            && bounds.size.width.isFinite && bounds.size.height.isFinite
+            && bounds.size.width > 0 && bounds.size.height > 0
+    }
+}
+
+/// There is room for one unstarted stream, and every lookup consumes it. A
+/// mismatched or expired stream cannot become a later gesture's fallback.
+struct PreviewStandbyCache<Value> {
+    private struct Entry {
+        let identity: PreviewStandbyIdentity
+        let value: Value
+        let preparedAt: TimeInterval
+    }
+    struct Taken {
+        let value: Value
+        let matches: Bool
+    }
+    private var entry: Entry?
+    var count: Int { entry == nil ? 0 : 1 }
+
+    func age(of identity: PreviewStandbyIdentity, now: TimeInterval) -> TimeInterval? {
+        guard let entry, identity.isValid, entry.identity == identity else { return nil }
+        let age = now - entry.preparedAt
+        return age.isFinite && age >= 0 ? age : nil
+    }
+
+    func contains(_ identity: PreviewStandbyIdentity, now: TimeInterval, maximumAge: TimeInterval) -> Bool {
+        guard let age = age(of: identity, now: now) else { return false }
+        return maximumAge.isFinite && maximumAge >= 0 && age <= maximumAge
+    }
+
+    @discardableResult
+    mutating func store(_ value: Value, identity: PreviewStandbyIdentity, preparedAt: TimeInterval) -> Value? {
+        let previous = entry?.value
+        entry = Entry(identity: identity, value: value, preparedAt: preparedAt)
+        return previous
+    }
+
+    mutating func take(matching identity: PreviewStandbyIdentity, now: TimeInterval, maximumAge: TimeInterval) -> Taken? {
+        guard let entry else { return nil }
+        self.entry = nil
+        return Taken(value: entry.value, matches: matches(entry, identity: identity, now: now, maximumAge: maximumAge))
+    }
+
+    @discardableResult
+    mutating func remove() -> Value? {
+        let previous = entry?.value
+        entry = nil
+        return previous
+    }
+
+    private func matches(_ entry: Entry, identity: PreviewStandbyIdentity,
+                         now: TimeInterval, maximumAge: TimeInterval) -> Bool {
+        let age = now - entry.preparedAt
+        return identity.isValid && entry.identity == identity && age.isFinite && age >= 0
+            && maximumAge.isFinite && maximumAge >= 0 && age <= maximumAge
     }
 }

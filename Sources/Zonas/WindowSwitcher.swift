@@ -53,6 +53,11 @@ enum WindowSwitcher {
         var isHidden = false
     }
 
+    private struct Identity: Hashable {
+        let window: CGWindowID
+        let owner: pid_t
+    }
+
     /// One stop on the list.
     struct Entry<Handle> {
         var window: Window<Handle>
@@ -100,16 +105,20 @@ enum WindowSwitcher {
                 && window.id.map(seen.contains) == true
         }
 
-        var byID: [CGWindowID: Int] = [:]
+        // A cache must not lend an old owner's handle to a reused window ID.
+        var byID: [Identity: Int] = [:]
         for (index, window) in candidates.enumerated() {
-            guard let id = window.id, byID[id] == nil else { continue }
-            byID[id] = index
+            guard let id = window.id else { continue }
+            let identity = Identity(window: id, owner: window.pid)
+            guard byID[identity] == nil else { continue }
+            byID[identity] = index
         }
 
         var taken = Set<Int>()
         var entries: [Entry<Handle>] = []
         for window in visible {
-            guard let index = byID[window.id], taken.insert(index).inserted else { continue }
+            guard let index = byID[Identity(window: window.id, owner: window.pid)],
+                  taken.insert(index).inserted else { continue }
             entries.append(Entry(window: candidates[index], bounds: window.bounds))
         }
         for (index, window) in candidates.enumerated()

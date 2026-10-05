@@ -55,7 +55,8 @@ final class WindowSwitcherController {
     private var whileOpen: [EventHotKeyRef] = []
 
     private var session: Session?
-    private var opening: (token: UUID, keys: SwitcherOpening)?
+    private var opening: (token: UUID, keys: SwitcherOpening, deliveryMS: UInt64, idleMS: UInt64?)?
+    private var lastOpeningBegan: DispatchTime?
     private var poll: Timer?
     private var reveal: DispatchWorkItem?
     private let panel = WindowSwitcherPanel()
@@ -66,6 +67,12 @@ final class WindowSwitcherController {
     private var exitingPreview: (window: CGWindowID, token: UUID)?
     private var activationToken = UUID()
     private let focusChecks = SwitcherWindowCache<UUID, Bool>()
+    private var idleReadiness = SwitcherIdleReadiness()
+    private var idleTimer: Timer?
+    private var idleWarmup: DispatchWorkItem?
+    private var idleWarmupToken = UUID()
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var displayObserver: NSObjectProtocol?
 
     /// How many sessions there have been, so a picture that arrives after
     /// its session has ended cannot be shown in the next one — where the same
@@ -111,13 +118,18 @@ final class WindowSwitcherController {
     /// input, so presentation now aims for 75 ms from the original press.
     private static let revealDelay: TimeInterval = 0.075
 
-    /// How long after the switcher is turned on to read every window once,
-    /// out of sight — see `warmUp`.
-    private static let warmUpDelay: TimeInterval = 0.25
-
     init() {
         panel.onPick = { [weak self] index in self?.pick(index) }
         panel.onPoint = { [weak self] index in self?.point(at: index) }
+        observeIdleChanges()
+    }
+
+    deinit {
+        idleTimer?.invalidate()
+        idleWarmup?.cancel()
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        workspaceObservers.forEach { workspaceCenter.removeObserver($0) }
+        if let displayObserver { NotificationCenter.default.removeObserver(displayObserver) }
     }
 
     // MARK: - The file
@@ -129,6 +141,9 @@ final class WindowSwitcherController {
     func apply(_ on: Bool) {
         guard on != applied else { return }
         applied = on
+        idleReadiness.setEnabled(false, at: ProcessInfo.processInfo.systemUptime)
+        cancelIdleScheduling()
+        previews.invalidateStandby()
         end()
         registered.forEach { UnregisterEventHotKey($0) }
         registered = []
@@ -155,13 +170,13 @@ final class WindowSwitcherController {
                   + (WindowPreviews.isAllowed ? "with previews"
                                               : "previews are off until Screen Recording is allowed, from the menu"))
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + WindowSwitcherController.warmUpDelay) {
-            [weak self] in self?.warmUp()
-        }
+        idleReadiness.setEnabled(true, at: ProcessInfo.processInfo.systemUptime)
+        startIdleTimer()
+        rescheduleIdleWarmup()
     }
 
-    /// One read of every window, and one list drawn where nobody can see it,
-    /// shortly after launch.
+    /// Read the windows and prepare the hidden panel while nobody is switching.
+    /// Repeating this keeps the first press after a long pause ready too.
     ///
     /// The first ⌥Tab after installing took about 410 ms to show its list,
     /// against about 210 for the ones after it, and the difference was all
@@ -170,19 +185,27 @@ final class WindowSwitcherController {
     /// rows and the applications' icons were made. None of that needs anybody
     /// to have pressed anything, and at launch nobody is waiting on it.
     ///
-    /// The applications are read off the main thread, so a slow one costs the
-    /// launch nothing. The list is drawn on it, because it is AppKit.
+    /// The applications are read off the main thread, with the same bounded
+    /// wait used by an opening that needs fresh handles. The list is drawn on
+    /// the main thread because it is AppKit. Disable, sleep, or a newer desktop
+    /// change rejects the old result without overlapping its worker.
     private func warmUp() {
-        guard applied == true, session == nil, opening == nil else { return }
+        guard applied == true,
+              let ticket = idleReadiness.begin(at: ProcessInfo.processInfo.systemUptime,
+                                               isBusy: isBusyForIdleWarmup) else { return }
         let started = DispatchTime.now()
         let applications = Self.applicationSnapshot()
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             let census = Self.census(applications: applications)
-            // Waiting as long as it takes: nobody is, and every answer that
-            // comes back is one `describe` can fall back on later.
-            let windows = WindowSwitcherController.describe(census, patience: nil).windows
+            let windows = Self.describe(census, patience: Self.patience, waitingForFresh: true).windows
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.applied == true, self.session == nil, self.opening == nil else { return }
+                guard let self else { return }
+                let current = self.idleReadiness.complete(ticket)
+                guard current, self.applied == true, !self.isBusyForIdleWarmup else {
+                    if self.isBusyForIdleWarmup { self.scheduleIdleWarmup() }
+                    else { self.rescheduleIdleWarmup() }
+                    return
+                }
                 let entries = WindowSwitcher.entries(listed: census.listed, windows: windows,
                                                      own: getpid()).entries
                 let screen = WindowSwitcherController.screen(for: entries)
@@ -191,13 +214,105 @@ final class WindowSwitcherController {
                 // picture is taken here — nothing is captured that nobody asked
                 // to see — but the list of what could be is fetched, so the
                 // first press does not wait for it.
-                let previewing = WindowPreviews.isAllowed
-                if previewing { self.previews.refreshList() }
+                let allowed = WindowPreviews.isAllowed
+                let previewing = allowed && WindowPreviews.isOn()
+                let ring = allowed && WindowPreviews.isInRing()
+                if previewing || ring { self.previews.refreshList(force: true) }
                 self.panel.prepare(WindowSwitcherController.rows(entries, around: screen), selected: 0,
                                    on: screen, showsPreview: previewing)
+                if ring, !entries.isEmpty {
+                    let entry = entries[min(1, entries.count - 1)]
+                    if let id = entry.window.id, let bounds = entry.bounds,
+                       bounds.origin.x.isFinite, bounds.origin.y.isFinite,
+                       bounds.width.isFinite, bounds.height.isFinite,
+                       bounds.width > 0, bounds.height > 0 {
+                        self.previews.prepareStandby(window: id, owner: entry.window.pid, bounds: bounds)
+                    }
+                }
                 Log.write("windows: ready — \(entries.count) windows read and drawn out of sight"
                           + " in \(WindowSwitcherController.milliseconds(since: started)) ms")
+                self.rescheduleIdleWarmup()
             }
+        }
+    }
+
+    private var isBusyForIdleWarmup: Bool {
+        session != nil || opening != nil || exitingPreview != nil
+    }
+
+    /// Called after a gesture or its final preview handoff has finished, and
+    /// when the application or display inventory changes.
+    private func scheduleIdleWarmup() {
+        idleReadiness.request(at: ProcessInfo.processInfo.systemUptime)
+        rescheduleIdleWarmup()
+    }
+
+    private func rescheduleIdleWarmup() {
+        idleWarmup?.cancel()
+        idleWarmup = nil
+        let token = UUID()
+        idleWarmupToken = token
+        guard idleReadiness.enabled, idleReadiness.isAwake,
+              idleReadiness.inFlight == nil, !isBusyForIdleWarmup,
+              let deadline = idleReadiness.deadline else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.idleWarmupToken == token else { return }
+            self.idleWarmup = nil
+            self.warmUp()
+        }
+        idleWarmup = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline - ProcessInfo.processInfo.systemUptime),
+                                      execute: work)
+    }
+
+    private func startIdleTimer() {
+        guard idleReadiness.enabled, idleReadiness.isAwake, idleTimer == nil else { return }
+        let timer = Timer(timeInterval: SwitcherIdleReadiness.refreshInterval, repeats: true) { [weak self] _ in
+            self?.scheduleIdleWarmup()
+        }
+        timer.tolerance = SwitcherIdleReadiness.timerTolerance
+        idleTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func cancelIdleScheduling() {
+        idleTimer?.invalidate()
+        idleTimer = nil
+        idleWarmup?.cancel()
+        idleWarmup = nil
+        idleWarmupToken = UUID()
+    }
+
+    private func observeIdleChanges() {
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
+                     NSWorkspace.didActivateApplicationNotification] {
+            workspaceObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                if let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                   application.processIdentifier == getpid() { return }
+                self?.previews.invalidateStandby()
+                self?.scheduleIdleWarmup()
+            })
+        }
+        workspaceObservers.append(center.addObserver(forName: NSWorkspace.willSleepNotification,
+                                                       object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.idleReadiness.setAwake(false, at: ProcessInfo.processInfo.systemUptime)
+            self.cancelIdleScheduling()
+            self.previews.invalidateStandby()
+        })
+        workspaceObservers.append(center.addObserver(forName: NSWorkspace.didWakeNotification,
+                                                       object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.previews.invalidateStandby()
+            self.idleReadiness.setAwake(true, at: ProcessInfo.processInfo.systemUptime)
+            self.startIdleTimer()
+            self.rescheduleIdleWarmup()
+        })
+        displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                                                  object: nil, queue: .main) { [weak self] _ in
+            self?.previews.invalidateStandby()
+            self?.scheduleIdleWarmup()
         }
     }
 
@@ -220,7 +335,7 @@ final class WindowSwitcherController {
                     return OSStatus(eventNotHandledErr)
                 }
                 Unmanaged<WindowSwitcherController>.fromOpaque(context)
-                    .takeUnretainedValue().pressed(key)
+                    .takeUnretainedValue().pressed(key, deliveryMS: UInt64(max(0, GetCurrentEventTime() - GetEventTime(event)) * 1000))
                 return noErr
             },
             1, &spec,
@@ -248,7 +363,7 @@ final class WindowSwitcherController {
 
     // MARK: - A session
 
-    private func pressed(_ key: Key) {
+    private func pressed(_ key: Key, deliveryMS: UInt64 = 0) {
         switch key {
         case .next, .previous:
             let delta = key == .next ? 1 : -1
@@ -258,7 +373,7 @@ final class WindowSwitcherController {
                 return
             }
             guard var current = session else {
-                begin(backwards: key == .previous)
+                begin(backwards: key == .previous, deliveryMS: deliveryMS)
                 return
             }
             let began = DispatchTime.now()
@@ -376,13 +491,15 @@ final class WindowSwitcherController {
         return entry.window.handle.title != nil || entry.window.handle.subrole != nil
     }
 
-    private func begin(backwards: Bool) {
+    private func begin(backwards: Bool, deliveryMS: UInt64) {
         activationToken = UUID()
         if exitingPreview != nil { end() }
         var keys = SwitcherOpening()
         keys.press(backwards: backwards)
         let token = UUID()
-        opening = (token, keys)
+        let idleMS = lastOpeningBegan.map(Self.milliseconds(since:))
+        lastOpeningBegan = keys.gestures[0].began
+        opening = (token, keys, deliveryMS, idleMS)
         listenWhileOpen()
 
         // AppKit supplies the process snapshot here; WindowServer and AX IPC
@@ -395,14 +512,17 @@ final class WindowSwitcherController {
             let census = Self.census(applications: applications)
             let censusMS = Self.milliseconds(since: censusBegan)
             let describeBegan = DispatchTime.now()
-            let (windows, late) = Self.describe(census, patience: Self.patience)
+            let (windows, late, waitBudget) = Self.describe(census, patience: Self.patience, waitingForFresh: false)
             let describeMS = Self.milliseconds(since: describeBegan)
             let (entries, leftOut) = WindowSwitcher.entries(listed: census.listed, windows: windows,
                                                           own: getpid())
+            let readFinished = DispatchTime.now()
             DispatchQueue.main.async {
                 self?.opened(entries, leftOut: leftOut, late: late, token: token,
                              readMS: Self.milliseconds(since: began),
-                             censusMS: censusMS, describeMS: describeMS)
+                             censusMS: censusMS, describeMS: describeMS,
+                             waitMS: UInt64((waitBudget ?? 0) * 1000),
+                             mainMS: Self.milliseconds(since: readFinished))
             }
         }
     }
@@ -412,7 +532,7 @@ final class WindowSwitcherController {
     /// the next gesture instead of losing a tap or counting it as a held Tab.
     private func opened(_ read: [WindowSwitcher.Entry<AXWindow>],
                         leftOut: [WindowSwitcher.Window<AXWindow>], late: [String], token: UUID,
-                        readMS: UInt64, censusMS: UInt64, describeMS: UInt64) {
+                        readMS: UInt64, censusMS: UInt64, describeMS: UInt64, waitMS: UInt64, mainMS: UInt64) {
         guard var pending = opening, pending.token == token, applied == true else { return }
         if !Self.optionIsDown { pending.keys.release() }
         opening = nil
@@ -429,8 +549,9 @@ final class WindowSwitcherController {
             return "\(owner)'s \"\(window.title ?? "")\" (\(why))"
         }.joined(separator: ", ")
         let waited = late.isEmpty ? "" : " — not waited for: " + late.joined(separator: ", ")
+        let idle = pending.idleMS.map { "\($0) ms" } ?? "first gesture"
         Log.write("windows: ⌥Tab — \(read.count) windows in \(readMS) ms"
-                  + " (WindowServer \(censusMS) ms, AX \(describeMS) ms, off the key thread)\(waited)\(skipped)")
+                  + " (WindowServer \(censusMS) ms, AX \(describeMS) ms with \(waitMS) ms budget, main delivery \(mainMS) ms, event lag \(pending.deliveryMS) ms, prior opening \(idle), off the key thread)\(waited)\(skipped)")
 
         var entries = read
         for gesture in pending.keys.gestures {
@@ -624,6 +745,7 @@ final class WindowSwitcherController {
                 guard let self, self.exitingPreview?.token == token else { return }
                 self.exitingPreview = nil
                 self.previews.end()
+                self.scheduleIdleWarmup()
             }
         }
 
@@ -674,7 +796,7 @@ final class WindowSwitcherController {
         guard let session, session.entries.indices.contains(index) else { return }
         if session.showsGhost, let id = session.entries[index].window.id,
            let bounds = session.entries[index].bounds {
-            previews.stream(id, size: bounds.size) { [weak self] in
+            previews.stream(id, bounds: bounds) { [weak self] in
                 self?.ringChoice()
             }
         } else {
@@ -718,6 +840,7 @@ final class WindowSwitcherController {
         whileOpen.forEach { UnregisterEventHotKey($0) }
         whileOpen = []
         panel.hide()
+        if !keepingPreview { scheduleIdleWarmup() }
     }
 
     // MARK: - Reading the windows
@@ -749,7 +872,7 @@ final class WindowSwitcherController {
                                    leftOut: [WindowSwitcher.Window<AXWindow>],
                                    late: [String]) {
         let census = census()
-        let (windows, late) = describe(census, patience: patience)
+        let (windows, late, _) = describe(census, patience: patience)
         let (entries, leftOut) = WindowSwitcher.entries(listed: census.listed, windows: windows,
                                                         own: getpid())
         return (entries, leftOut, late)
@@ -772,17 +895,24 @@ final class WindowSwitcherController {
         var listed: [WindowSwitcher.Listed]
         var pids: [pid_t]
         var hidden: Set<pid_t>
+        var recent: Set<pid_t>
     }
 
     private struct ApplicationSnapshot {
         let regular: [pid_t]
         let hidden: Set<pid_t>
+        let recent: Set<pid_t>
     }
 
     private static func applicationSnapshot() -> ApplicationSnapshot {
         let applications = NSWorkspace.shared.runningApplications
+        let now = Date()
+        let recent = Set(applications.filter { application in
+            application.launchDate.map { now.timeIntervalSince($0) < 5 } ?? false
+        }.map(\.processIdentifier))
         return ApplicationSnapshot(regular: applications.filter { $0.activationPolicy == .regular }
-            .map(\.processIdentifier), hidden: Set(applications.filter(\.isHidden).map(\.processIdentifier)))
+            .map(\.processIdentifier), hidden: Set(applications.filter(\.isHidden).map(\.processIdentifier)),
+            recent: recent)
     }
 
     private static func census() -> Census { census(applications: applicationSnapshot()) }
@@ -795,7 +925,7 @@ final class WindowSwitcherController {
             pids.append(window.pid)
         }
         for pid in applications.regular where seen.insert(pid).inserted { pids.append(pid) }
-        return Census(listed: listed, pids: pids, hidden: applications.hidden)
+        return Census(listed: listed, pids: pids, hidden: applications.hidden, recent: applications.recent)
     }
 
     /// Every application's windows, asked all at once from background threads,
@@ -804,15 +934,20 @@ final class WindowSwitcherController {
     ///
     /// An application still answering when the wait is over carries on in the
     /// background, and what it says is remembered for next time. So is every
-    /// prompt answer: the memory is only ever as old as the last press.
-    private static func describe(_ census: Census, patience: TimeInterval?)
-        -> (windows: [WindowSwitcher.Window<AXWindow>], late: [String]) {
+    /// prompt answer. Idle maintenance also refreshes it between gestures;
+    /// known owners and visible IDs use a short budget instead of waiting for
+    /// an unrelated slow application on every opening.
+    private static func describe(_ census: Census, patience: TimeInterval?, waitingForFresh: Bool = true)
+        -> (windows: [WindowSwitcher.Window<AXWindow>], late: [String], waitBudget: TimeInterval?) {
         let pids = census.pids
         let hidden = census.hidden
-        let remembersNothing = windowCache.snapshot(keeping: Set(pids)).isEmpty
+        let remembered = windowCache.snapshot(keeping: Set(pids))
+        let waitBudget = SwitcherInventoryRead.budget(listed: census.listed, memory: remembered,
+            pids: pids, hidden: hidden, recent: census.recent, own: getpid(), patience: patience, waitingForFresh: waitingForFresh)
+        let qos: DispatchQoS.QoSClass = waitingForFresh ? .utility : .userInitiated
         let group = DispatchGroup()
         let requests = pids.map { pid -> DispatchGroup in
-            let request = windowCache.request(pid) {
+            let request = windowCache.request(pid, qos: qos) {
                 guard let windows = AXWindow.windows(of: pid) else { return nil }
                 return windows.map { window in
                     WindowSwitcher.Window(handle: window, id: window.windowID, pid: pid,
@@ -821,11 +956,11 @@ final class WindowSwitcherController {
                 }
             }
             group.enter()
-            request.notify(queue: .global(qos: .userInitiated)) { group.leave() }
+            request.notify(queue: .global(qos: qos)) { group.leave() }
             return request
         }
-        if let patience {
-            _ = group.wait(timeout: .now() + (remembersNothing ? max(patience, 0.5) : patience))
+        if let waitBudget {
+            _ = group.wait(timeout: .now() + waitBudget)
         } else {
             group.wait()
         }
@@ -846,7 +981,7 @@ final class WindowSwitcherController {
                                             : "\(name), as it last answered")
             }
         }
-        return (windows, late)
+        return (windows, late, waitBudget)
     }
 
     private static func milliseconds(since start: DispatchTime) -> UInt64 {
