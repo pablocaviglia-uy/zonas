@@ -48,10 +48,22 @@ struct PreviewHandoff<Picture> {
     mutating func reset() { displayed = nil; waiting = nil }
 }
 
+/// A window number alone is not enough to reuse a picture: a closed window's
+/// number may later belong to another process, or the same window may resize.
+struct PreviewFrameIdentity: Equatable {
+    let owner: pid_t
+    let size: CGSize
+}
+
 /// Recent native-resolution frames are useful on the way back through the
 /// carousel, but a desktop full of large windows must not grow this indefinitely.
 struct PreviewFrameCache<Picture> {
-    private struct Entry { let picture: Picture; let bytes: Int }
+    private struct Entry {
+        let picture: Picture
+        let bytes: Int
+        let identity: PreviewFrameIdentity?
+        let capturedAt: TimeInterval
+    }
     private var entries: [CGWindowID: Entry] = [:]
     private var order: [CGWindowID] = [] // least recently used first
     private(set) var bytes = 0
@@ -71,10 +83,45 @@ struct PreviewFrameCache<Picture> {
         return entry.picture
     }
 
-    mutating func store(_ picture: Picture, for window: CGWindowID, bytes cost: Int) {
+    /// Validation happens at lookup, not only at a new session: a long hold
+    /// must not resurrect an expired prefetch when the user comes back to it.
+    mutating func picture(of window: CGWindowID, matching identity: PreviewFrameIdentity,
+                          now: TimeInterval, maximumAge: TimeInterval) -> Picture? {
+        guard let entry = entries[window] else { return nil }
+        guard isUsable(entry, matching: identity, now: now, maximumAge: maximumAge) else {
+            remove(window)
+            return nil
+        }
+        return picture(of: window)
+    }
+
+    mutating func prune(windows: Set<CGWindowID>, identities: [CGWindowID: PreviewFrameIdentity],
+                        now: TimeInterval, maximumAge: TimeInterval) {
+        let expired = entries.compactMap { window, entry -> CGWindowID? in
+            guard windows.contains(window), let identity = identities[window],
+                  isUsable(entry, matching: identity, now: now, maximumAge: maximumAge) else { return window }
+            return nil
+        }
+        expired.forEach { remove($0) }
+    }
+
+    private func isUsable(_ entry: Entry, matching identity: PreviewFrameIdentity,
+                          now: TimeInterval, maximumAge: TimeInterval) -> Bool {
+        let age = now - entry.capturedAt
+        return entry.identity == identity && age.isFinite && age >= 0
+            && maximumAge >= 0 && age <= maximumAge
+    }
+
+    private mutating func remove(_ window: CGWindowID) {
+        if let entry = entries.removeValue(forKey: window) { bytes -= entry.bytes }
+        order.removeAll { $0 == window }
+    }
+
+    mutating func store(_ picture: Picture, for window: CGWindowID, bytes cost: Int,
+                        identity: PreviewFrameIdentity? = nil, capturedAt: TimeInterval = 0) {
         guard cost >= 0 else { return }
         if let previous = entries[window] { bytes -= previous.bytes }
-        entries[window] = Entry(picture: picture, bytes: cost)
+        entries[window] = Entry(picture: picture, bytes: cost, identity: identity, capturedAt: capturedAt)
         bytes += cost
         order.removeAll { $0 == window }; order.append(window)
         // Keep one oversized current frame: discarding that too would mean

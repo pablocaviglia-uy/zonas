@@ -21,7 +21,7 @@ import Carbon
 /// events and the hot key's arrive by two different routes with nothing to say
 /// which came first — so a quick tap could be over before the press that
 /// started it had been delivered. Asking the system whether ⌥ is down, when
-/// the press arrives and sixty times a second while the list is up, has
+/// the press arrives and 120 times a second while the list is up, has
 /// neither problem, reads nothing but the four modifiers, and stops the moment
 /// the list closes.
 final class WindowSwitcherController {
@@ -55,6 +55,7 @@ final class WindowSwitcherController {
     private var whileOpen: [EventHotKeyRef] = []
 
     private var session: Session?
+    private var opening: (token: UUID, keys: SwitcherOpening)?
     private var poll: Timer?
     private var reveal: DispatchWorkItem?
     private let panel = WindowSwitcherPanel()
@@ -64,6 +65,7 @@ final class WindowSwitcherController {
     private var previewDeadline: DispatchWorkItem?
     private var exitingPreview: (window: CGWindowID, token: UUID)?
     private var activationToken = UUID()
+    private let focusChecks = SwitcherWindowCache<UUID, Bool>()
 
     /// How many sessions there have been, so a picture that arrives after
     /// its session has ended cannot be shown in the next one — where the same
@@ -83,6 +85,8 @@ final class WindowSwitcherController {
         /// it got where it did. "The wrong window came up" is a report about
         /// either the list or the presses, and the log has to tell them apart.
         var presses = 1
+        var previewDirection = 1
+        var peakSelectionMicroseconds: UInt64 = 0
         /// The press that opened it, which every time in the log counts from.
         let began: DispatchTime
         /// Which session this is — see `sessions`.
@@ -101,26 +105,15 @@ final class WindowSwitcherController {
         var screen: NSScreen?
     }
 
-    /// How long ⌥ has to stay down, counted from the press, before the list
-    /// is put on screen.
-    ///
-    /// A quick tap is the most common use of the key — back to the window you
-    /// were just in — and showing the list straight away would flash it on
-    /// every one. The two quick taps logged at the desk this was tuned at let
-    /// go of ⌥ about 107 and 125 ms after the press, so 130 ms keeps both from
-    /// flashing, with little to spare: it is the number to raise if somebody's
-    /// taps are slower.
-    ///
-    /// It was 150 ms counted from the end of reading the windows, which put
-    /// the read in front of the wait and the drawing after it, and came to
-    /// about 210 ms before anything appeared. Counted from the press, with the
-    /// read inside it and the list drawn out of sight while it runs, what you
-    /// wait for is this number and nothing added on.
-    private static let revealDelay: TimeInterval = 0.13
+    /// A short grace period still lets a very quick tap switch without a
+    /// panel. The old 130 ms floor dominated normal openings even when the
+    /// inventory and preview were ready much earlier. AX no longer blocks
+    /// input, so presentation now aims for 75 ms from the original press.
+    private static let revealDelay: TimeInterval = 0.075
 
     /// How long after the switcher is turned on to read every window once,
     /// out of sight — see `warmUp`.
-    private static let warmUpDelay: TimeInterval = 2
+    private static let warmUpDelay: TimeInterval = 0.25
 
     init() {
         panel.onPick = { [weak self] index in self?.pick(index) }
@@ -180,15 +173,16 @@ final class WindowSwitcherController {
     /// The applications are read off the main thread, so a slow one costs the
     /// launch nothing. The list is drawn on it, because it is AppKit.
     private func warmUp() {
-        guard applied == true, session == nil else { return }
+        guard applied == true, session == nil, opening == nil else { return }
         let started = DispatchTime.now()
-        let census = WindowSwitcherController.census()
+        let applications = Self.applicationSnapshot()
         DispatchQueue.global(qos: .utility).async {
+            let census = Self.census(applications: applications)
             // Waiting as long as it takes: nobody is, and every answer that
             // comes back is one `describe` can fall back on later.
             let windows = WindowSwitcherController.describe(census, patience: nil).windows
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.session == nil else { return }
+                guard let self, self.applied == true, self.session == nil, self.opening == nil else { return }
                 let entries = WindowSwitcher.entries(listed: census.listed, windows: windows,
                                                      own: getpid()).entries
                 let screen = WindowSwitcherController.screen(for: entries)
@@ -258,24 +252,35 @@ final class WindowSwitcherController {
         switch key {
         case .next, .previous:
             let delta = key == .next ? 1 : -1
+            if var pending = opening {
+                pending.keys.press(backwards: key == .previous)
+                opening = pending
+                return
+            }
             guard var current = session else {
                 begin(backwards: key == .previous)
                 return
             }
+            let began = DispatchTime.now()
             current.cycle.step(delta)
             current.presses += 1
+            current.previewDirection = delta
             session = current
             panel.select(current.cycle.index)
             showPreview(of: current.cycle.index)
             ringChoice()
+            recordSelectionCost(since: began)
 
         case .cancel:
-            guard session != nil else { return }
+            guard session != nil || opening != nil else { return }
             Log.write("windows: cancelled with Esc — nothing moved")
             end()
 
         case .close:
-            guard let current = session else { return }
+            guard let current = session else {
+                if opening != nil { Log.write("windows: ⌥Q while the inventory is loading — nothing closed") }
+                return
+            }
             // Nothing is closed that nobody has seen: during the wait before
             // the strip appears, the choice is one the person pressing has not
             // looked at yet.
@@ -373,102 +378,132 @@ final class WindowSwitcherController {
 
     private func begin(backwards: Bool) {
         activationToken = UUID()
-        // A fresh shortcut owns the overlay and capture immediately; an old
-        // dismissal must never hide the new switcher or stop its stream.
         if exitingPreview != nil { end() }
-        // Everything is timed from here — the wait before the list appears
-        // included, so that reading the windows happens inside it rather than
-        // before it.
-        let pressed = DispatchTime.now()
-        let (entries, leftOut, late) = WindowSwitcherController.read()
-        let took = WindowSwitcherController.milliseconds(since: pressed)
+        var keys = SwitcherOpening()
+        keys.press(backwards: backwards)
+        let token = UUID()
+        opening = (token, keys)
+        listenWhileOpen()
 
-        guard let cycle = WindowSwitcher.Cycle(count: entries.count, backwards: backwards) else {
+        // AppKit supplies the process snapshot here; WindowServer and AX IPC
+        // run elsewhere. Waiting on AX on the hot-key thread used to delay
+        // the next Tab, Escape and even noticing that Option had come up.
+        let applications = Self.applicationSnapshot()
+        let began = keys.gestures[0].began
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let censusBegan = DispatchTime.now()
+            let census = Self.census(applications: applications)
+            let censusMS = Self.milliseconds(since: censusBegan)
+            let describeBegan = DispatchTime.now()
+            let (windows, late) = Self.describe(census, patience: Self.patience)
+            let describeMS = Self.milliseconds(since: describeBegan)
+            let (entries, leftOut) = WindowSwitcher.entries(listed: census.listed, windows: windows,
+                                                          own: getpid())
+            DispatchQueue.main.async {
+                self?.opened(entries, leftOut: leftOut, late: late, token: token,
+                             readMS: Self.milliseconds(since: began),
+                             censusMS: censusMS, describeMS: describeMS)
+            }
+        }
+    }
+
+    /// A second tap can finish before the first inventory arrives. Apply each
+    /// completed gesture in order, and use its chosen window as the front of
+    /// the next gesture instead of losing a tap or counting it as a held Tab.
+    private func opened(_ read: [WindowSwitcher.Entry<AXWindow>],
+                        leftOut: [WindowSwitcher.Window<AXWindow>], late: [String], token: UUID,
+                        readMS: UInt64, censusMS: UInt64, describeMS: UInt64) {
+        guard var pending = opening, pending.token == token, applied == true else { return }
+        if !Self.optionIsDown { pending.keys.release() }
+        opening = nil
+        guard !read.isEmpty else {
             Log.write("windows: ⌥Tab — there is no window to switch to"
                       + (AXIsProcessTrusted() ? "" : ": the Accessibility permission is missing"))
+            end()
             return
         }
-        sessions += 1
-        session = Session(entries: entries, cycle: cycle, began: pressed, number: sessions)
-
-        // Rule 9: a window somebody expected on the list and did not find is
-        // the report this line answers.
         let skipped = leftOut.isEmpty ? "" : " — left out: " + leftOut.map { window in
             let subrole = window.subrole ?? "no subrole"
             let why = AXWindow.isTheSystemsOwn(subrole: subrole) ? "the system's own" : "\(subrole), no title"
-            return "\(window.handle.name) (\(why))"
+            let owner = NSRunningApplication(processIdentifier: window.pid)?.localizedName ?? "An unnamed process"
+            return "\(owner)'s \"\(window.title ?? "")\" (\(why))"
         }.joined(separator: ", ")
         let waited = late.isEmpty ? "" : " — not waited for: " + late.joined(separator: ", ")
-        Log.write("windows: ⌥Tab — \(entries.count) windows in \(took) ms\(waited)\(skipped)")
+        Log.write("windows: ⌥Tab — \(read.count) windows in \(readMS) ms"
+                  + " (WindowServer \(censusMS) ms, AX \(describeMS) ms, off the key thread)\(waited)\(skipped)")
 
-        // The finger can be off ⌥ already. A tap is over in about a tenth of a
-        // second and reading the list can take most of that — before `patience`
-        // it took as long as a quarter of one, and three taps during testing
-        // found ⌥ up by this line.
-        guard WindowSwitcherController.optionIsDown else {
-            commit()
-            return
+        var entries = read
+        for gesture in pending.keys.gestures {
+            guard let cycle = gesture.cycle(count: entries.count) else { continue }
+            sessions += 1
+            session = Session(entries: entries, cycle: cycle, presses: gesture.presses,
+                              previewDirection: gesture.lastDirection,
+                              began: gesture.began, number: sessions)
+            if gesture.released {
+                let chosen = entries.remove(at: cycle.index)
+                entries.insert(chosen, at: 0)
+                commit()
+            } else {
+                prepareSession()
+            }
         }
+    }
 
-        // Drawn now, out of sight, so that putting it on screen when the wait
-        // is over costs nothing. The icons and the rows took about 30 ms, and
-        // they used to be added on after the wait instead of hidden inside it.
-        let screen = WindowSwitcherController.screen(for: entries)
-        let place = screen?.localizedName ?? "no screen"
-        session?.screen = screen
-        // Asked, never requested: the request is the menu's. Asked on every
-        // press rather than once, because the switch is flipped in System
-        // Settings, where nothing tells Zonas it happened — and the two in the
-        // menu are read here as well so that one session is one answer, rather
-        // than a session that could change its mind halfway through.
-        let showsPreviews = WindowPreviews.isAllowed && WindowPreviews.isOn()
-        session?.showsPreviews = showsPreviews
-        session?.showsGhost = WindowPreviews.isAllowed && WindowPreviews.isInRing()
-        if showsPreviews || session?.showsGhost == true {
-            previews.begin(windows: Set(entries.compactMap(\.window.id)))
+    private func listenWhileOpen() {
+        if whileOpen.isEmpty {
+            whileOpen = [register(.cancel, keyCode: kVK_Escape, modifiers: optionKey),
+                         register(.close, keyCode: kVK_ANSI_Q, modifiers: optionKey)].compactMap { $0 }
         }
-        panel.prepare(WindowSwitcherController.rows(entries, around: screen), selected: cycle.index,
-                      on: screen, showsPreview: showsPreviews)
-        showPreview(of: cycle.index)
-
-        whileOpen = [register(.cancel, keyCode: kVK_Escape, modifiers: optionKey),
-                     register(.close, keyCode: kVK_ANSI_Q, modifiers: optionKey)].compactMap { $0 }
-
-        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
-            guard !WindowSwitcherController.optionIsDown else { return }
+        guard poll == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+            guard !Self.optionIsDown else { return }
             self?.commit()
         }
-        // `.common`, so a menu that happens to be open does not stop the list
-        // from ever closing.
         RunLoop.main.add(timer, forMode: .common)
         poll = timer
+    }
+
+    private func prepareSession() {
+        guard let current = session else { return }
+        listenWhileOpen()
+        let entries = current.entries
+        let screen = Self.screen(for: entries)
+        let place = screen?.localizedName ?? "no screen"
+        session?.screen = screen
+        let allowed = WindowPreviews.isAllowed
+        let showsPreviews = allowed && WindowPreviews.isOn()
+        session?.showsPreviews = showsPreviews
+        session?.showsGhost = allowed && WindowPreviews.isInRing()
+        if showsPreviews || session?.showsGhost == true {
+            let owners = Dictionary(entries.compactMap { entry in
+                entry.window.id.map { ($0, entry.window.pid) }
+            }, uniquingKeysWith: { first, _ in first })
+            let identities: [CGWindowID: PreviewFrameIdentity] = Dictionary(uniqueKeysWithValues: entries.compactMap { entry -> (CGWindowID, PreviewFrameIdentity)? in
+                guard let id = entry.window.id, let bounds = entry.bounds else { return nil }
+                return (id, PreviewFrameIdentity(owner: entry.window.pid, size: bounds.size))
+            })
+            previews.begin(windows: Set(entries.compactMap(\.window.id)), owners: owners, identities: identities)
+        }
+        let prepareBegan = DispatchTime.now()
+        panel.prepare(Self.rows(entries, around: screen), selected: current.cycle.index,
+                      on: screen, showsPreview: showsPreviews)
+        showPreview(of: current.cycle.index)
+        Log.write("windows: prepared selection in \(Self.milliseconds(since: prepareBegan)) ms")
 
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.session != nil else { return }
-            // Asked again rather than left to the poll, which can be a
-            // sixtieth of a second behind: a tap that ended inside that gap
-            // would flash the very list this wait is there to keep away.
-            guard WindowSwitcherController.optionIsDown else {
+            guard let self, self.session?.number == current.number else { return }
+            guard Self.optionIsDown else {
                 self.commit()
                 return
             }
             self.panel.reveal()
             self.session?.isRevealed = true
             self.ringChoice()
-            // A state change like the drag's "showing zones", and the line that
-            // tells "the list never appeared" apart from "it appeared somewhere
-            // else" — and how long it took, which is the question the wait
-            // above was tuned against. Two early readings during testing found
-            // no list on screen with the session open, and could not be
-            // repeated.
             Log.write("windows: showing the list on \(place), "
-                      + "\(WindowSwitcherController.milliseconds(since: pressed)) ms after the press")
+                      + "\(Self.milliseconds(since: current.began)) ms after the press")
         }
         reveal = work
-        // A deadline already past — a read that took longer than the wait —
-        // runs as soon as this returns.
-        DispatchQueue.main.asyncAfter(deadline: pressed + WindowSwitcherController.revealDelay,
-                                      execute: work)
+        DispatchQueue.main.asyncAfter(deadline: current.began + Self.revealDelay, execute: work)
     }
 
     /// The pointer moved onto a window's icon: it becomes the choice, exactly
@@ -476,11 +511,21 @@ final class WindowSwitcherController {
     /// click.
     private func point(at index: Int) {
         guard var current = session, current.entries.indices.contains(index) else { return }
-        current.cycle.step(index - current.cycle.index)
+        let began = DispatchTime.now()
+        let delta = index - current.cycle.index
+        current.cycle.step(delta)
+        if delta != 0 { current.previewDirection = delta < 0 ? -1 : 1 }
         session = current
         panel.select(index)
         showPreview(of: index)
         ringChoice()
+        recordSelectionCost(since: began)
+    }
+
+    private func recordSelectionCost(since began: DispatchTime) {
+        let cost = (DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1000
+        let previous = session?.peakSelectionMicroseconds ?? 0
+        session?.peakSelectionMicroseconds = max(previous, cost)
     }
 
     /// Rings the chosen window where it is on the desktop — once the strip is
@@ -497,10 +542,17 @@ final class WindowSwitcherController {
         let picture = pictureOfChoice(session)
         let failed = entry.window.id.map { previews.liveCaptureFailed(for: $0) } ?? false
         let previousToken = previewHandoff.pendingToken
+        let previousFrame = previewHandoff.displayed
         let frame = previewHandoff.choose(window: entry.window.id, bounds: entry.bounds, picture: picture,
                                            expectsPicture: session.showsGhost && !failed)
-        if let frame { highlight.show(frame.bounds, picture: frame.picture) }
-        else { highlight.hide() }
+        if let frame {
+            if frame.window == previousFrame?.window, frame.bounds == previousFrame?.bounds,
+               let picture = frame.picture, previousFrame?.picture != nil {
+                if picture !== previousFrame?.picture { highlight.updatePicture(picture) }
+            } else {
+                highlight.show(frame.bounds, picture: frame.picture)
+            }
+        } else { highlight.hide() }
 
         guard let token = previewHandoff.pendingToken else {
             previewDeadline?.cancel(); previewDeadline = nil
@@ -542,6 +594,11 @@ final class WindowSwitcherController {
 
     /// ⌥ came up: the chosen window goes to the front.
     private func commit() {
+        if var pending = opening {
+            pending.keys.release()
+            opening = pending
+            return
+        }
         guard let session else { return }
         let entry = session.entries[session.cycle.index]
         let shown = previewHandoff.displayed
@@ -553,12 +610,17 @@ final class WindowSwitcherController {
         let activation = activationToken
 
         let window = entry.window.handle
+        let owner = NSRunningApplication(processIdentifier: entry.window.pid)?.localizedName ?? "An unnamed process"
+        let name = "\(owner)'s \"\(entry.window.title ?? "")\""
         let held = WindowSwitcherController.milliseconds(since: session.began)
         Log.write("windows: \(session.presses) \(session.presses == 1 ? "press" : "presses") in \(held) ms"
-                  + " — number \(session.cycle.index + 1) of \(session.entries.count), \(window.name)")
+                  + " — number \(session.cycle.index + 1) of \(session.entries.count), \(name)"
+                  + " (selection handling peak \(session.peakSelectionMicroseconds) µs)")
         window.bringForward()
         if keepsPreview {
-            highlight.dismiss(canReveal: { window.isInFront }) { [weak self] in
+            highlight.dismiss(canReveal: { [weak self] in
+                self?.canReveal(window, activation: activation) ?? false
+            }) { [weak self] in
                 guard let self, self.exitingPreview?.token == token else { return }
                 self.exitingPreview = nil
                 self.previews.end()
@@ -569,20 +631,37 @@ final class WindowSwitcherController {
         // a second, and would read as a failure well before it had finished
         // arriving.
         let settle: TimeInterval = entry.bounds == nil ? 0.6 : 0.2
+        verifyActivation(window, name: name, token: activation, settle: settle)
+    }
+
+    /// A stopped application can spend 250 ms on each AX attribute. Reading
+    /// focus directly from the 60 Hz dismissal timer blocked every other key.
+    /// The timer now polls a shared background answer without waiting on IPC.
+    private func canReveal(_ window: AXWindow, activation: UUID) -> Bool {
+        guard activationToken == activation else { return false }
+        if focusChecks.snapshot(keeping: [activation])[activation] == true { return true }
+        _ = focusChecks.request(activation) { window.isInFront }
+        return false
+    }
+
+    private func verifyActivation(_ window: AXWindow, name: String, token: UUID,
+                                  settle: TimeInterval, secondAttempt: Bool = false) {
         DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
-            guard let self, self.activationToken == activation, self.session == nil else { return }
-            if window.isInFront {
-                Log.write("windows: \(window.name) is in front")
-                return
-            }
-            window.askToComeForward()
-            DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
-                guard let self, self.activationToken == activation, self.session == nil else { return }
-                if window.isInFront {
-                    Log.write("windows: \(window.name) is in front, at the second time of asking")
-                } else {
-                    let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "nothing"
-                    Log.write("windows: asked for \(window.name) twice, and \(front) is in front")
+            guard let self, self.activationToken == token, self.session == nil, self.opening == nil else { return }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ready = window.isInFront
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.activationToken == token, self.session == nil, self.opening == nil else { return }
+                    if ready {
+                        Log.write("windows: \(name) is in front"
+                                  + (secondAttempt ? ", at the second time of asking" : ""))
+                    } else if secondAttempt {
+                        let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "nothing"
+                        Log.write("windows: asked for \(name) twice, and \(front) is in front")
+                    } else {
+                        window.askToComeForward()
+                        self.verifyActivation(window, name: name, token: token, settle: settle, secondAttempt: true)
+                    }
                 }
             }
         }
@@ -601,9 +680,13 @@ final class WindowSwitcherController {
         } else {
             previews.stopStream()
         }
+        let next = (index + session.previewDirection + session.entries.count) % session.entries.count
+        if session.showsGhost, next != index,
+           let id = session.entries[next].window.id, let bounds = session.entries[next].bounds {
+            previews.prefetchNative(id, size: bounds.size)
+        }
         guard session.showsPreviews else { return }
         let number = session.number
-        let next = (index + 1) % session.entries.count
         for (offset, position) in [index, next].enumerated() {
             guard offset == 0 || position != index, let id = session.entries[position].window.id else { continue }
             if offset == 0 { panel.showPreview(previews.picture(of: id), forRow: position) }
@@ -618,7 +701,9 @@ final class WindowSwitcherController {
     /// Back to no session: no strip, no ⌥Esc or ⌥Q, nothing polling.
     private func end(keepingPreview: Bool = false) {
         activationToken = UUID()
+        opening = nil
         session = nil
+        _ = focusChecks.snapshot(keeping: [])
         previewDeadline?.cancel(); previewDeadline = nil
         previewHandoff.reset()
         if !keepingPreview {
@@ -674,53 +759,12 @@ final class WindowSwitcherController {
     ///
     /// Every warm application on this machine answers in a few milliseconds
     /// and the whole list in 7 to 37; a first conversation took up to 56. So
-    /// 80 ms waits for everybody who is going to answer promptly, and — with
-    /// the read and the drawing both inside `revealDelay` — keeps the list on
-    /// time at 130 ms even when somebody is not.
+    /// 80 ms waits for everybody who is going to answer promptly. This runs
+    /// on a worker: input remains responsive, but a late answer can still
+    /// extend presentation beyond the 75 ms grace period.
     private static let patience: TimeInterval = 0.08
 
-    /// The last answer each application gave, for the press it is too slow
-    /// for. Written from the threads the applications are asked on, which is
-    /// why it has a lock.
-    private static var remembered: [pid_t: [WindowSwitcher.Window<AXWindow>]] = [:]
-
-    /// The applications with a question still out.
-    ///
-    /// A stuck application can hold its thread for a quarter of a second per
-    /// question — one for the list and four per window — and asking it again
-    /// on every press would pile up a thread per press behind it. One question
-    /// at a time: until it answers, the next press uses what it said last.
-    private static var asking: Set<pid_t> = []
-
-    /// Guards `remembered` and `asking`.
-    private static let memoryLock = NSLock()
-
-    /// One application's answer, or the lack of one yet, collected from
-    /// whichever thread asked it.
-    private enum Answer {
-        case pending
-        case failed
-        case answered([WindowSwitcher.Window<AXWindow>])
-    }
-
-    private final class Answers {
-        private let lock = NSLock()
-        private var answers: [Answer]
-
-        init(count: Int) { answers = Array(repeating: .pending, count: count) }
-
-        func store(_ answer: Answer, at index: Int) {
-            lock.lock()
-            answers[index] = answer
-            lock.unlock()
-        }
-
-        var snapshot: [Answer] {
-            lock.lock()
-            defer { lock.unlock() }
-            return answers
-        }
-    }
+    private static let windowCache = SwitcherWindowCache<pid_t, [WindowSwitcher.Window<AXWindow>]>()
 
     /// What has to be asked on the main thread before the applications can be
     /// asked anywhere: what is on screen, and which applications to read.
@@ -730,24 +774,28 @@ final class WindowSwitcherController {
         var hidden: Set<pid_t>
     }
 
-    private static func census() -> Census {
-        let listed = listedOnScreen()
+    private struct ApplicationSnapshot {
+        let regular: [pid_t]
+        let hidden: Set<pid_t>
+    }
 
-        // On-screen owners first, so the order the applications are read in
-        // — which is the order minimized windows end up in — starts with what
-        // is in use.
+    private static func applicationSnapshot() -> ApplicationSnapshot {
+        let applications = NSWorkspace.shared.runningApplications
+        return ApplicationSnapshot(regular: applications.filter { $0.activationPolicy == .regular }
+            .map(\.processIdentifier), hidden: Set(applications.filter(\.isHidden).map(\.processIdentifier)))
+    }
+
+    private static func census() -> Census { census(applications: applicationSnapshot()) }
+
+    private static func census(applications: ApplicationSnapshot) -> Census {
+        let listed = listedOnScreen()
         var pids: [pid_t] = []
         var seen: Set<pid_t> = [getpid()]
         for window in listed where window.layer == 0 && seen.insert(window.pid).inserted {
             pids.append(window.pid)
         }
-        let applications = NSWorkspace.shared.runningApplications
-        for application in applications where application.activationPolicy == .regular
-            && seen.insert(application.processIdentifier).inserted {
-            pids.append(application.processIdentifier)
-        }
-        let hidden = Set(applications.filter(\.isHidden).map(\.processIdentifier))
-        return Census(listed: listed, pids: pids, hidden: hidden)
+        for pid in applications.regular where seen.insert(pid).inserted { pids.append(pid) }
+        return Census(listed: listed, pids: pids, hidden: applications.hidden)
     }
 
     /// Every application's windows, asked all at once from background threads,
@@ -761,85 +809,41 @@ final class WindowSwitcherController {
         -> (windows: [WindowSwitcher.Window<AXWindow>], late: [String]) {
         let pids = census.pids
         let hidden = census.hidden
-        let answers = Answers(count: pids.count)
+        let remembersNothing = windowCache.snapshot(keeping: Set(pids)).isEmpty
         let group = DispatchGroup()
-
-        for (index, pid) in pids.enumerated() {
-            memoryLock.lock()
-            let alreadyAsked = !asking.insert(pid).inserted
-            memoryLock.unlock()
-            // Left pending, which is what it is.
-            if alreadyAsked { continue }
-
-            DispatchQueue.global(qos: .userInitiated).async(group: group) {
-                defer {
-                    memoryLock.lock()
-                    asking.remove(pid)
-                    memoryLock.unlock()
+        let requests = pids.map { pid -> DispatchGroup in
+            let request = windowCache.request(pid) {
+                guard let windows = AXWindow.windows(of: pid) else { return nil }
+                return windows.map { window in
+                    WindowSwitcher.Window(handle: window, id: window.windowID, pid: pid,
+                                          subrole: window.subrole, title: window.title,
+                                          isMinimized: window.isMinimized, isHidden: hidden.contains(pid))
                 }
-                guard let windows = AXWindow.windows(of: pid) else {
-                    answers.store(.failed, at: index)
-                    return
-                }
-                let described = windows.map { window in
-                    WindowSwitcher.Window(handle: window,
-                                          id: window.windowID,
-                                          pid: pid,
-                                          subrole: window.subrole,
-                                          title: window.title,
-                                          isMinimized: window.isMinimized,
-                                          isHidden: hidden.contains(pid))
-                }
-                answers.store(.answered(described), at: index)
-                memoryLock.lock()
-                remembered[pid] = described
-                memoryLock.unlock()
             }
+            group.enter()
+            request.notify(queue: .global(qos: .userInitiated)) { group.leave() }
+            return request
         }
-        memoryLock.lock()
-        let remembersNothing = remembered.isEmpty
-        memoryLock.unlock()
         if let patience {
-            // Nothing to fall back on is the first read a process makes, and
-            // it is also the slowest: every application is being spoken to for
-            // the first time. The first ⌥Tab after installing found Claude and
-            // Sublime Text at 156 ms each — twice the ordinary patience, with
-            // no earlier answer to stand in — so a press before the warm-up
-            // would have left them off the list. The first read waits up to
-            // half a second instead; a cold one measured 55 ms for twelve
-            // applications, so this is headroom, not a cost.
             _ = group.wait(timeout: .now() + (remembersNothing ? max(patience, 0.5) : patience))
         } else {
             group.wait()
         }
 
-        memoryLock.lock()
-        // Applications that have quit are forgotten, or this grows by one
-        // entry for every application ever opened while Zonas was running.
-        remembered = remembered.filter { pids.contains($0.key) }
-        let memory = remembered
-        memoryLock.unlock()
-
+        let memory = windowCache.snapshot(keeping: Set(pids))
         var windows: [WindowSwitcher.Window<AXWindow>] = []
         var late: [String] = []
-        for (index, answer) in answers.snapshot.enumerated() {
-            let pid = pids[index]
-            switch answer {
-            case .answered(let own):
-                windows += own
-            case .failed, .pending:
-                // Whether it is hidden is today's answer, not the memory's.
-                let recalled = memory[pid]?.map { window -> WindowSwitcher.Window<AXWindow> in
-                    var window = window
-                    window.isHidden = hidden.contains(pid)
-                    return window
-                }
-                windows += recalled ?? []
-                if case .pending = answer {
-                    let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "pid \(pid)"
-                    late.append(recalled == nil ? "\(name), which has not answered yet"
-                                                : "\(name), as it last answered")
-                }
+        for (index, pid) in pids.enumerated() {
+            let recalled = memory[pid]?.map { window -> WindowSwitcher.Window<AXWindow> in
+                var window = window
+                window.isHidden = hidden.contains(pid)
+                return window
+            }
+            windows += recalled ?? []
+            if requests[index].wait(timeout: .now()) == .timedOut {
+                let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "pid \(pid)"
+                late.append(recalled == nil ? "\(name), which has not answered yet"
+                                            : "\(name), as it last answered")
             }
         }
         return (windows, late)
@@ -877,13 +881,33 @@ final class WindowSwitcherController {
     /// The screen is named too, in the line under the title, when the window
     /// is on a different one from the panel: "Centro" on the laptop and
     /// "Centro" on the monitor are two different places.
+    private struct ApplicationPresentation {
+        let launched: Date?
+        let name: String
+        let icon: NSImage?
+    }
+
+    // Reading NSRunningApplication.icon can decode a new image even when the
+    // panel was already warmed. Reuse that representation across gestures,
+    // and invalidate it on process restart rather than caching by PID alone.
+    private static var presentations: [pid_t: ApplicationPresentation] = [:]
+
     static func rows(_ entries: [WindowSwitcher.Entry<AXWindow>],
                              around panelScreen: NSScreen?) -> [WindowSwitcherPanel.Row] {
         let layout = LayoutStore.shared.layout
         let severalScreens = NSScreen.screens.count > 1
+        let pids = Set(entries.map(\.window.pid))
+        presentations = presentations.filter { pids.contains($0.key) }
+        for pid in pids {
+            let application = NSRunningApplication(processIdentifier: pid)
+            if presentations[pid] == nil || presentations[pid]?.launched != application?.launchDate {
+                presentations[pid] = ApplicationPresentation(launched: application?.launchDate,
+                    name: application?.localizedName ?? "An unnamed process", icon: application?.icon)
+            }
+        }
         return entries.map { entry in
-            let application = NSRunningApplication(processIdentifier: entry.window.pid)
-            let owner = application?.localizedName ?? "An unnamed process"
+            let pid = entry.window.pid
+            let owner = presentations[pid]!.name
             let title = WindowSwitcher.title(entry.window.title, application: owner)
 
             // Said, for the windows at the end of the strip, because they are
@@ -911,7 +935,7 @@ final class WindowSwitcherController {
                 }
             }
             let detail = ([owner, place] + [elsewhere].compactMap { $0 }).joined(separator: " · ")
-            return WindowSwitcherPanel.Row(icon: application?.icon, title: title, detail: detail,
+            return WindowSwitcherPanel.Row(icon: presentations[pid]?.icon, title: title, detail: detail,
                                            label: zone ?? title, isAway: entry.bounds == nil)
         }
     }

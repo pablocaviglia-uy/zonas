@@ -119,9 +119,9 @@ final class WindowSwitcherPanel {
         let height = (showsPreview ? previewY + previewBox.height : stripY + Self.cellHeight) + Self.padding
 
         let panel = self.panel ?? makePanel()
-        panel.setFrame(NSRect(x: area.midX - width / 2, y: area.midY - height / 2,
-                              width: width, height: height),
-                       display: false)
+        let frame = NSRect(x: area.midX - width / 2, y: area.midY - height / 2,
+                           width: width, height: height)
+        if panel.frame != frame { panel.setFrame(frame, display: false) }
 
         preview.isHidden = !showsPreview
         preview.frame = NSRect(x: (width - previewBox.width) / 2, y: previewY,
@@ -155,17 +155,31 @@ final class WindowSwitcherPanel {
     /// Moves the choice, on screen or not: a Tab pressed during the wait has
     /// to be in the panel by the time it appears.
     func select(_ index: Int) {
+        guard index != selected else { return }
+        let previous = selected
         selected = index
         guard panel != nil, !rows.isEmpty else { return }
-        first = WindowSwitcher.top(showing: index, from: first, count: rows.count, capacity: strip.visible)
-        fill()
+        let top = WindowSwitcher.top(showing: index, from: first, count: rows.count, capacity: strip.visible)
+        if top != first {
+            first = top
+            fillCells()
+        } else {
+            // A normal Tab only changes two selection backgrounds. Rebinding
+            // every icon and wrapping every label here made selection pay for
+            // the whole strip even when it had not scrolled.
+            for (position, chosen) in [(previous, false), (index, true)] {
+                let offset = position - first
+                if cells.indices.contains(offset) { cells[offset].isChosen = chosen }
+            }
+        }
+        fillCaption()
     }
 
     /// A picture for one window, shown if that window is the one chosen.
     /// `nil` puts back the stand-in: the application's icon.
     func showPreview(_ image: NSImage?, forRow index: Int) {
         guard index == selected else { return }
-        preview.image = image
+        if preview.image !== image { preview.image = image }
     }
 
     func hide() {
@@ -230,34 +244,47 @@ final class WindowSwitcherPanel {
             cells.removeLast().removeFromSuperview()
         }
         for (offset, cell) in cells.enumerated() {
-            cell.frame = NSRect(x: originX + CGFloat(offset) * strip.cell, y: y,
-                                width: strip.cell, height: Self.cellHeight)
-            // So `prepare`'s layout pass reaches it now, out of sight, whether
-            // or not the new frame was a different size.
-            cell.needsLayout = true
+            let frame = NSRect(x: originX + CGFloat(offset) * strip.cell, y: y,
+                               width: strip.cell, height: Self.cellHeight)
+            if cell.frame != frame {
+                cell.frame = frame
+                cell.needsLayout = true
+            }
         }
     }
 
     private func fill() {
+        fillCells()
+        fillCaption()
+    }
+
+    private func fillCells() {
         for (offset, cell) in cells.enumerated() {
             let index = first + offset
             guard rows.indices.contains(index) else {
-                cell.isHidden = true
+                if !cell.isHidden { cell.isHidden = true }
                 continue
             }
-            cell.isHidden = false
-            cell.icon.image = rows[index].icon
-            cell.icon.alphaValue = rows[index].isAway ? 0.45 : 1
-            cell.label.stringValue = rows[index].label
+            if cell.isHidden { cell.isHidden = false }
+            if cell.icon.image !== rows[index].icon { cell.icon.image = rows[index].icon }
+            let opacity: CGFloat = rows[index].isAway ? 0.45 : 1
+            if cell.icon.alphaValue != opacity { cell.icon.alphaValue = opacity }
+            if cell.label.stringValue != rows[index].label { cell.label.stringValue = rows[index].label }
             cell.isChosen = index == selected
-            cell.onClick = { [weak self] in self?.onPick?(index) }
-            cell.onPoint = { [weak self] in self?.pointed(at: index) }
+            if cell.representedIndex != index {
+                cell.representedIndex = index
+                cell.onClick = { [weak self] in self?.onPick?(index) }
+                cell.onPoint = { [weak self] in self?.pointed(at: index) }
+            }
         }
+    }
+
+    private func fillCaption() {
         guard rows.indices.contains(selected) else { return }
-        title.stringValue = rows[selected].title
-        detail.stringValue = rows[selected].detail
-        preview.placeholder = rows[selected].icon
-        preview.image = nil
+        if title.stringValue != rows[selected].title { title.stringValue = rows[selected].title }
+        if detail.stringValue != rows[selected].detail { detail.stringValue = rows[selected].detail }
+        if preview.placeholder !== rows[selected].icon { preview.placeholder = rows[selected].icon }
+        if preview.image != nil { preview.image = nil }
     }
 
     private static func roundedMask(radius: CGFloat) -> NSImage {
@@ -280,6 +307,7 @@ private final class SwitcherCellView: NSView {
     let label = NSTextField(labelWithString: "")
     var onClick: (() -> Void)?
     var onPoint: (() -> Void)?
+    var representedIndex: Int?
 
     var isChosen = false {
         didSet {
@@ -401,12 +429,12 @@ final class WindowHighlight {
             }
 
             let window = windows[display] ?? make(on: display)
-            window.alphaValue = 1
-            window.setFrame(screen.frame, display: false)
+            if window.alphaValue != 1 { window.alphaValue = 1 }
+            if window.frame != screen.frame { window.setFrame(screen.frame, display: false) }
             (window.contentView as? RingView)?.show(hole: hole,
                                                     picture: picture,
                                                     spotlight: spotlight)
-            window.orderFrontRegardless()
+            if !window.isVisible { window.orderFrontRegardless() }
         }
     }
 
@@ -507,6 +535,7 @@ final class RingView: NSView {
     }
 
     func updatePicture(_ picture: NSImage) {
+        guard Spotlight.holds(hole, in: bounds), picture !== self.picture else { return }
         self.picture = picture
         needsDisplay = true
     }

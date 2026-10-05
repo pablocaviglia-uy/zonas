@@ -307,7 +307,8 @@ keep their exact names, and combinations without a shared name remain explicit.
 
 The order is the order you last used them in, so **a single tap of ⌥Tab goes
 back to the window you were just in**, and a second tap brings you back again.
-A quick tap never shows the strip at all; held, it appears after 130 ms.
+A tap released before the 75 ms grace period shows no strip. Holding the key
+aims to show it after that period; a slow application can take longer.
 
 What is on it: every window on the screens and Spaces you are looking at, all
 monitors included. What is not: windows on other Spaces — bringing one forward

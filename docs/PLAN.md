@@ -2546,6 +2546,83 @@ overlaps, differing widths/heights and unrelated names retain the explicit
 combination. Single-zone labels stay verbatim. This changes presentation only;
 the layout file, snapping and `Layout.union(of:)` keep the original zone names.
 
+### Switcher input and preview latency — 2026-10-05
+
+The installed 0.8.6 log sample showed a 135 ms median reveal, a 135 ms median
+first live frame measured from the capture request, and live-frame outliers up
+to 722 ms. The panel had a deliberate 130 ms reveal floor, while its hot-key
+handler also waited synchronously for AX answers. Those are different costs;
+preview startup is not measured from the original key press.
+
+Opening now records input immediately and reads WindowServer/AX off the key
+thread. Repeated forward/backward keys, completed taps and cancellation remain
+owned by that opening's token. Completed taps replay in order, moving the
+chosen entry to the front before the next tap; the visible session still keeps
+a fixed list. Launch warm-up starts after 250 ms and shares outstanding reads
+with openings, so a cold overlap cannot mistake an empty local wait group for
+an empty inventory. Successful empty AX answers remove closed windows; failed
+answers keep the last usable metadata. There is still only one read per PID.
+
+Presentation now targets 75 ms from the press. This prioritizes early feedback;
+a short tap held longer than that can briefly reveal the panel. It is a grace
+period, not a latency ceiling: a cold application may still take longer. Option
+release is checked at 120 Hz while opening or choosing.
+
+Recent full-resolution frames survive adjacent gestures for at most two
+seconds of reuse, validated against current owner and size and kept under the
+existing four-frame/64 MiB LRU budget (with its one oversized-frame exception).
+A native screenshot races the selected stream's cold start; the carousel joins
+that request instead of taking another screenshot. A fresh live frame wins
+over a late still. The next neighbor in the latest selection direction is
+prefetched after a short grace period, only inside the explicit gesture. Native
+screenshot work is globally bounded to two jobs across session changes, with
+obsolete pending choices coalesced. Each stream has one latest-frame delivery
+slot rather than an unbounded queue of CGImages waiting for the main thread.
+
+The shared image-conversion context and output queue are reused. Stream filters,
+configuration and output registration are prepared on a worker; the main thread
+adopts a prepared stream only after rechecking generation, owner and size.
+Application icons are reused across gestures and invalidated on process restart.
+Focus readback for dismissal and activation verification also runs off the main
+thread; a stalled application cannot block input through that polling timer.
+Normal panel selection changes only the old/new cells; unchanged icons, labels and image
+references do not redraw. Video frames update the existing picture without
+reordering full-screen overlay windows or redrawing another display's unchanged
+scrim. The independent preview settings, Retina sizing, opaque visual handoff
+and two-stage dismissal are retained.
+
+Runtime logs now separate WindowServer, AX, panel preparation, native cache,
+native fallback and stream readiness, and report peak selection-handler work
+once per completed gesture. Unit tests and a hidden-panel benchmark establish
+logic and processing costs; they do not establish parity with the native macOS
+switcher or a visually smooth physical-display handoff.
+
+Validation on 2026-10-05: 463 tests in 66 suites passed. A temporary
+before/after fixture used the original panel from `2beaed4` and the optimized
+panel, both hidden on the verified integrated display. Across 720 warm
+selections, synchronous selection plus layout fell from 0.03975 ms median
+(p95 0.06429 ms) to 0.03098 ms (p95 0.05429 ms). Across 48 repeated prepares,
+median cost fell from 0.12625 to 0.10200 ms. These small CPU savings are separate
+from the larger reveal/capture waits; they exclude WindowServer presentation
+and ScreenCaptureKit latency. The temporary baseline/test fixtures were removed.
+
+The first installed trial produced a real user-driven opening in 118 ms, with
+29 ms of background inventory work and a 289 microsecond peak selection handler.
+That one gesture also had a 721 ms cold live-frame outlier during a Teams call:
+it does not establish native-level latency. The second iteration removes more
+main-thread preparation and focus reads; its 463-test suite passed again before
+installation. Capture startup remains a measured limitation, not a guaranteed
+75 ms path.
+
+The final trial was built in release mode, signed with the existing Developer ID
+requirement and installed in `/Applications/Zonas.app`. The installed binary
+matched the prepared artifact; one running installed process was verified. Its
+own startup log reported Accessibility YES, active event tap, enabled login item
+and preview permission, then a 12-window warm-up completed in 154 ms. The final
+iteration has no new user-driven opening sample yet. The published 0.8.6 bundle
+and first trial were backed up for recovery. Pablo accepted the installed trial
+and authorized the 0.8.7 production release on 2026-10-05.
+
 ### Stage 5 — The visual editor · 12 days
 
 | Piece | Days |
