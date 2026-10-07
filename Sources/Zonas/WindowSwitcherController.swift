@@ -25,6 +25,9 @@ import Carbon
 /// neither problem, reads nothing but the four modifiers, and stops the moment
 /// the list closes.
 final class WindowSwitcherController {
+    /// Advisory only. The experiment cannot mutate the cycle or commit focus.
+    var gazeSuggestion: ((Set<CGWindowID>, Double) -> CGWindowID?)?
+    var gazeSessionEnded: (() -> Void)?
 
     /// What each key does. The raw value is the identity the handler gets back.
     private enum Key: UInt32 {
@@ -95,6 +98,7 @@ final class WindowSwitcherController {
         /// Where the strip is, kept so that closing a window redraws it in the
         /// same place rather than following whichever window is now first.
         var screen: NSScreen?
+        var gazeID: CGWindowID?
     }
 
     /// How long ⌥ has to stay down, counted from the press, before the list
@@ -351,6 +355,7 @@ final class WindowSwitcherController {
 
         panel.prepare(WindowSwitcherController.rows(current.entries, around: current.screen),
                       selected: cycle.index, on: current.screen, showsPreview: current.showsPreviews)
+        panel.showGazeHint(forRow: current.entries.firstIndex { $0.window.id == current.gazeID && current.gazeID != nil })
         panel.reveal()
         showPreview(of: cycle.index)
         ringChoice()
@@ -372,6 +377,7 @@ final class WindowSwitcherController {
         // included, so that reading the windows happens inside it rather than
         // before it.
         let pressed = DispatchTime.now()
+        let gazeTime = ProcessInfo.processInfo.systemUptime
         let (entries, leftOut, late) = WindowSwitcherController.read()
         let took = WindowSwitcherController.milliseconds(since: pressed)
 
@@ -421,6 +427,12 @@ final class WindowSwitcherController {
         }
         panel.prepare(WindowSwitcherController.rows(entries, around: screen), selected: cycle.index,
                       on: screen, showsPreview: showsPreviews)
+        // Freeze the gaze from before the carousel appeared. Following the
+        // person's eyes afterwards would identify the carousel itself.
+        let gazeID = gazeSuggestion?(Set(entries.compactMap { $0.bounds == nil ? nil : $0.window.id }), gazeTime)
+        session?.gazeID = gazeID
+        panel.showGazeHint(forRow: entries.firstIndex { $0.window.id == gazeID && gazeID != nil })
+        if let gazeID { Log.write("gaze POC: advisory window \(gazeID); keyboard choice unchanged") }
         showPreview(of: cycle.index)
 
         whileOpen = [register(.cancel, keyCode: kVK_Escape, modifiers: optionKey),
@@ -578,6 +590,7 @@ final class WindowSwitcherController {
         whileOpen.forEach { UnregisterEventHotKey($0) }
         whileOpen = []
         panel.hide()
+        gazeSessionEnded?()
     }
 
     // MARK: - Reading the windows
@@ -639,6 +652,26 @@ final class WindowSwitcherController {
 
     /// Guards `remembered` and `asking`.
     private static let memoryLock = NSLock()
+
+    struct GazeWindowMetadata {
+        let id: CGWindowID
+        let pid: pid_t
+        let title: String
+    }
+
+    /// The live monitor must not ask every application at camera frame rate.
+    /// Copy only already-read strings and identities; never dereference AX handles.
+    static func cachedGazeWindows() -> [GazeWindowMetadata] {
+        memoryLock.lock()
+        defer { memoryLock.unlock() }
+        return remembered.values.flatMap { windows in
+            windows.compactMap { window in
+                guard let id = window.id, window.pid != getpid(),
+                      WindowSwitcher.isSwitchable(subrole: window.subrole, title: window.title) else { return nil }
+                return GazeWindowMetadata(id: id, pid: window.pid, title: window.title ?? "")
+            }
+        }
+    }
 
     /// One application's answer, or the lack of one yet, collected from
     /// whichever thread asked it.

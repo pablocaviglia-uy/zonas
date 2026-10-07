@@ -19,7 +19,7 @@
   so an accident here fails loudly and locally instead of two minutes into an
   upload.
 
-  Nothing else belongs in this file. Zonas ships with ZERO entitlements: moving
+  The gaze POC also needs the camera entitlement used by the normal build. Moving
   other applications' windows is governed by TCC —the Accessibility toggle the
   user flips— and not by any entitlement. There is no accessibility entitlement
   for third-party apps, whatever the top Google result for "hardened runtime
@@ -35,6 +35,8 @@
 -->
 <plist version="1.0">
 <dict>
+	<key>com.apple.security.device.camera</key>
+	<true/>
 	<key>com.apple.security.get-task-allow</key>
 	<true/>
 </dict>

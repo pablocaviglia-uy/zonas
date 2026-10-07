@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var permissionsItem: NSMenuItem?
     private let shortcuts = ShortcutController()
     private let windowSwitcher = WindowSwitcherController()
+    private let gazeExperiment = GazeExperimentController()
     private var problemItem: NSMenuItem?
     private var switcherMenu: NSMenu?
 
@@ -56,12 +57,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         wireTheEditor()
         wireTheWelcome()
         wireTheSwitcher()
+        windowSwitcher.gazeSuggestion = { [weak self] ids, time in
+            self?.gazeExperiment.suggestion(eligible: ids, at: time)
+        }
+        windowSwitcher.gazeSessionEnded = { [weak self] in self?.gazeExperiment.switcherEnded() }
         startMonitor()
         startWatchingTheLayout()
         shortcuts.apply(LayoutStore.shared.layout.shortcuts)
         windowSwitcher.apply(LayoutStore.shared.layout.windowSwitcher)
 
-        welcome.openIfFirstLaunch(readiness: readiness)
+        if Bundle.main.object(forInfoDictionaryKey: "ZonasGazePOC") as? Bool == true {
+            gazeExperiment.open()
+        } else {
+            welcome.openIfFirstLaunch(readiness: readiness)
+        }
         describeTheIcon()
     }
 
@@ -75,6 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// to have vanished leads nowhere. Both Rectangle and BetterDisplay point
     /// their users at exactly this for exactly this reason.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if Bundle.main.object(forInfoDictionaryKey: "ZonasGazePOC") as? Bool == true {
+            gazeExperiment.open()
+            return true
+        }
         Log.write("welcome: opened again from the Finder")
         welcome.open(readiness: readiness)
         describeTheIcon()
@@ -370,6 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
     }
     func applicationWillTerminate(_ notification: Notification) {
+        gazeExperiment.stop()
         monitor.stop()
         layoutWatcher?.stop()
     }
@@ -588,6 +602,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let spotlight = ownItem("Dim the Other Windows", #selector(toggleSpotlight))
         spotlightItem = spotlight
         windowChoices.addItem(spotlight)
+        windowChoices.addItem(.separator())
+        windowChoices.addItem(ownItem("Gaze Experiment (POC)…", #selector(openGazeExperiment)))
+        windowChoices.addItem(ownItem("Stop Gaze Experiment", #selector(stopGazeExperiment)))
 
         // A submenu and not a row of items, because the list is however many
         // monitors are plugged in and it changes while the app is running.
@@ -644,6 +661,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc private func openEditor() {
         editor.open()
     }
+
+    @objc private func openGazeExperiment() { gazeExperiment.open() }
+    @objc private func stopGazeExperiment() { gazeExperiment.stop() }
 
     @objc private func openWelcome() {
         welcome.open(readiness: readiness)

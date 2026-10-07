@@ -20,6 +20,7 @@ enum Command: String, CaseIterable {
     case apps
     case help
     case version
+    case gazeDiagnostics = "gaze-diagnostics"
 
     /// Runs the command and returns a process exit code.
     static func run(_ arguments: [String]) -> Int32 {
@@ -43,6 +44,11 @@ enum Command: String, CaseIterable {
         case .apps: return listApps()
         case .help: return help()
         case .version: return printVersion()
+        case .gazeDiagnostics:
+            do {
+                try GazeExperimentController().writeDiagnostics(to: url ?? URL(fileURLWithPath: "/private/tmp/zonas-gaze-diagnostics"))
+                return 0
+            } catch { print("Gaze diagnostics failed: \(error)"); return 1 }
         }
     }
 

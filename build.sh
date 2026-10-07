@@ -165,7 +165,7 @@ ID="$(identidad_de_firma || true)"
 # memory, DYLD_* injection and loading code signed by another team, none of
 # which happens here (`otool -L` lists nothing but Apple's own dylibs).
 #
-# It needs NO entitlement. The event tap and the Accessibility API are governed
+# The event tap and the Accessibility API are governed
 # by TCC at runtime, not by entitlements; there has never been an accessibility
 # entitlement for third-party apps, and `NSAccessibilityUsageDescription` is not
 # a real key either — grep tccd and neither string is in it. Verified on this
@@ -180,7 +180,9 @@ OPCIONES_FIRMA="runtime"
 # notary rejects any build carrying it, by name. Hence a separate file and an
 # explicit opt-in, never a default:
 #   ZONAS_DEBUG_ENTITLEMENTS=1 ./build.sh -r
-ENTITLEMENTS=""
+# Hardened runtime requires an entitlement in addition to TCC consent for
+# camera capture. It grants no consent and starts no capture on its own.
+ENTITLEMENTS="$RAIZ/Resources/Zonas.entitlements"
 if [[ -n "${ZONAS_DEBUG_ENTITLEMENTS:-}" ]]; then
     ENTITLEMENTS="$RAIZ/Resources/Zonas-debug.entitlements"
     echo "WARNING: signing with get-task-allow. This build can NOT be notarized."

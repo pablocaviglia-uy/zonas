@@ -15,6 +15,61 @@ part that stops the next person from cheerfully undoing it.
 
 ## 1. Where things stand
 
+**Experimental branch, 2026-10-01:** `codex/gaze-window-poc` adds an opt-in local
+webcam gaze experiment with a separate signed app, personal calibration,
+independent spatial validation and an advisory Alt+Tab mark. Read
+[`GAZE-POC.md`](GAZE-POC.md) for the setup, measured gates and remaining human
+experiment. Internal tests passed; the first hands-on side-mounted laptop camera
+did not detect pupils adequately. A front-facing webcam on the ultrawide is the
+next setup to test. This experiment is not merged, published or established as
+accurate, and the stable app remains available separately.
+
+**POC feedback correction, 2026-10-07:** a first calibration target could turn
+green after the 0.9-second settling interval even with no usable pupil samples.
+That colour was not evidence of gaze detection. The overlay now shows sample
+count, remaining time and camera observation; green requires the actual
+collection threshold. Timeout and Esc return to the controls with distinct
+reasons and aggregate log entries. Camera rejection diagnostics distinguish
+missing landmarks, pupils, head pose and invalid eye geometry. The 18-sample,
+seven-second limits and independent accuracy gates remain unchanged. The live
+controls observed `No face detected` and a cancelled attempt before this change;
+the screenshot alone cannot establish which reason closed an earlier attempt.
+
+The next signed trial produced a concrete first-point failure: face found,
+`pitch` unavailable, 0/18 usable samples after seven seconds. The implicit face
+detector used by the landmarks request did not supply this required angle.
+Capture now explicitly runs face rectangle revision 3, which computes pitch,
+then passes that same frame's single eligible observation into landmarks.
+Missing angles still reject the sample; the model never substitutes zero or
+joins different frames. This fixes the request pipeline, not a demonstrated
+personal gaze-accuracy result.
+
+Validation after the request correction: 402 tests in 57 suites passed. The
+newly signed installed POC retained Accessibility, opened controls on built-in
+display 1 and displayed `Camera on · Both pupils detected` with the real camera.
+That status requires all eye/pose gates and the 200 ms inference budget to pass;
+The next front-facing MacBook trial passed personal independent validation:
+6/6 regions, 97% coverage, median 5.4%, P90 9.9%, error box ±92×105 display
+points. Real window use remained confusing and is not established as accurate.
+
+**Live POC diagnostics, 2026-10-07:** controls now show the current estimate,
+steady fixation, measured error box and visible-window map, with explicit
+abstention reasons. An optional nonactivating click-through screen marker
+allows trials with the controls closed. `Last ⌥Tab` records the exact opening
+decision; the map freezes until the carousel closes. Geometry is refreshed
+on a utility queue with one request in flight and expires after one second;
+live eligibility uses cached AX strings joined by window number and PID.
+No continuous AX inventory queries, focus writes or raw frame storage were
+added. The marker's own window alone is ignored; the controls remain genuine
+occluders. Camera loss, calibration, stop and display changes clear diagnostics.
+406 tests in 57 suites passed. Accepted/uncertain maps and candidate/lost-eye
+markers were rendered off-screen. Final signed-app QA on built-in display 1
+confirmed Accessibility, both pupils detected at approximately 13 frames/s,
+readable controls and map, and the enabled marker option. The stable installed
+binary was verified unchanged. A new personal calibration and real-window
+trials remain the human handoff; synthetic marker fixtures do not establish
+tracking accuracy.
+
 **Repository:** https://github.com/pablocaviglia-uy/zonas — public, MIT.
 
 > **Updated 2026-08-04.** Everything in §3 has landed, one commit per fix, in

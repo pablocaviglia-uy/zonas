@@ -25,5 +25,9 @@
 	<!-- Sin ícono en el Dock: la app vive en la barra de menú. -->
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>The optional Gaze Experiment uses your camera to estimate which window you are looking at. Processing stays on this Mac; no video is saved.</string>
+	<key>NSCameraUseContinuityCameraDeviceType</key>
+	<true/>
 </dict>
 </plist>

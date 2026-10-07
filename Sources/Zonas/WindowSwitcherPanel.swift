@@ -65,6 +65,7 @@ final class WindowSwitcherPanel {
 
     private var rows: [Row] = []
     private var selected = 0
+    private var gazeHint: Int?
     private var first = 0
     private var strip = WindowSwitcher.Strip(cell: 84, visible: 0)
 
@@ -98,6 +99,7 @@ final class WindowSwitcherPanel {
         guard let screen = screen ?? NSScreen.main else { return }
         self.rows = rows
         self.selected = selected
+        gazeHint = nil
         scale = screen.backingScaleFactor
 
         // Nine tenths of the screen at most; past that the cells shrink, and
@@ -170,6 +172,11 @@ final class WindowSwitcherPanel {
 
     func hide() {
         panel?.orderOut(nil)
+    }
+
+    func showGazeHint(forRow index: Int?) {
+        gazeHint = index
+        for (offset, cell) in cells.enumerated() { cell.isGazeSuggested = first + offset == index }
     }
 
     // MARK: - Building it
@@ -250,6 +257,7 @@ final class WindowSwitcherPanel {
             cell.icon.alphaValue = rows[index].isAway ? 0.45 : 1
             cell.label.stringValue = rows[index].label
             cell.isChosen = index == selected
+            cell.isGazeSuggested = index == gazeHint
             cell.onClick = { [weak self] in self?.onPick?(index) }
             cell.onPoint = { [weak self] in self?.pointed(at: index) }
         }
@@ -280,6 +288,12 @@ private final class SwitcherCellView: NSView {
     let label = NSTextField(labelWithString: "")
     var onClick: (() -> Void)?
     var onPoint: (() -> Void)?
+    var isGazeSuggested = false {
+        didSet {
+            needsDisplay = true
+            toolTip = isGazeSuggested ? "Gaze experiment: you may have been looking at this window. Keys and clicks still choose." : nil
+        }
+    }
 
     var isChosen = false {
         didSet {
@@ -316,9 +330,14 @@ private final class SwitcherCellView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard isChosen else { return }
-        NSColor.white.withAlphaComponent(0.16).setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 12, yRadius: 12).fill()
+        if isChosen {
+            NSColor.white.withAlphaComponent(0.16).setFill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 12, yRadius: 12).fill()
+        }
+        if isGazeSuggested {
+            NSColor.systemMint.setFill()
+            NSBezierPath(ovalIn: CGRect(x: bounds.maxX - 15, y: bounds.maxY - 15, width: 7, height: 7)).fill()
+        }
     }
 
     // The panel is never key, so without this the first click on a cell would
